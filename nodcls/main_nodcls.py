@@ -1,34 +1,35 @@
-'''Train CIFAR10 with PyTorch.'''
+#!/usr/bin/python2
 from __future__ import print_function
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
+from torch.autograd import Variable
 
 import transforms as transforms
 from dataloader import lunanod
+from dataloader import CROPSIZE
 import pandas as pd
 import os
 import argparse
 from sklearn.ensemble import GradientBoostingClassifier as gbt
 import pickle
-
 from models.dpn3d import DPN92_3D
 from utils import progress_bar
-from utils import get_mean_and_std
-from torch.autograd import Variable
+
 import logging
 import numpy as np
 
-CROPSIZE = 32  #17 is too small
+
 gbtdepth = 1
-fold = 5   # the subset for test
+fold = 9   # the subset for test
 blklst = []
 logging.basicConfig(filename='log-'+str(fold), level=logging.INFO)
 parser = argparse.ArgumentParser(description='Nodule Classifier Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
+parser.add_argument('--crop', default=False, type=bool, help='crop 3D bounding box from preprocess images')
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
@@ -41,7 +42,7 @@ croppath = '/data/LUNA16/crop/'
 anno_csv = './data/annotationdetclsconvfnl_v3.csv'
 
 
-def crop(preprocesspath, croppath, anno_csv):
+def crop(preprocesspath, croppath, anno_csv, cropsize):
     pdframe = pd.read_csv(anno_csv,
                           names=['seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm', 'malignant'])
     srslst = pdframe['seriesuid'].tolist()[1:]
@@ -66,19 +67,19 @@ def crop(preprocesspath, croppath, anno_csv):
         crdz = int(float(anno[3]))
         dim = int(float(anno[4]))
         data = np.load(os.path.join(preprocesspath, pid + '_clean.npy'))
-        bgx = max(0, crdx - CROPSIZE / 2)
-        bgy = max(0, crdy - CROPSIZE / 2)
-        bgz = max(0, crdz - CROPSIZE / 2)
-        cropdata = np.ones((CROPSIZE, CROPSIZE, CROPSIZE)) * 170
-        cropdatatmp = np.array(data[0, bgx:bgx + CROPSIZE, bgy:bgy + CROPSIZE, bgz:bgz + CROPSIZE])
-        cropdata[CROPSIZE / 2 - cropdatatmp.shape[0] / 2:CROPSIZE / 2 - cropdatatmp.shape[0] / 2 + cropdatatmp.shape[0], \
-        CROPSIZE / 2 - cropdatatmp.shape[1] / 2:CROPSIZE / 2 - cropdatatmp.shape[1] / 2 + cropdatatmp.shape[1], \
-        CROPSIZE / 2 - cropdatatmp.shape[2] / 2:CROPSIZE / 2 - cropdatatmp.shape[2] / 2 + cropdatatmp.shape[
-            2]] = np.array(2 - cropdatatmp)
-        assert cropdata.shape[0] == CROPSIZE and cropdata.shape[1] == CROPSIZE and cropdata.shape[2] == CROPSIZE
+        bgx = max(0, crdx - cropsize / 2)
+        bgy = max(0, crdy - cropsize / 2)
+        bgz = max(0, crdz - cropsize / 2)
+        cropdata = np.ones((cropsize, cropsize, cropsize)) * 170
+        cropdatatmp = np.array(data[0, bgx:bgx + cropsize, bgy:bgy + cropsize, bgz:bgz + cropsize])
+        cropdata[cropsize / 2 - cropdatatmp.shape[0] / 2:cropsize / 2 - cropdatatmp.shape[0] / 2 + cropdatatmp.shape[0], \
+        cropsize / 2 - cropdatatmp.shape[1] / 2:cropsize / 2 - cropdatatmp.shape[1] / 2 + cropdatatmp.shape[1], \
+        cropsize / 2 - cropdatatmp.shape[2] / 2:cropsize / 2 - cropdatatmp.shape[2] / 2 + cropdatatmp.shape[2]] = np.array(2 - cropdatatmp)
+        assert cropdata.shape[0] == cropsize and cropdata.shape[1] == cropsize and cropdata.shape[2] == cropsize
         np.save(os.path.join(croppath, fname + '.npy'), cropdata)
 
-crop(preprocesspath, croppath, anno_csv)
+if args.crop:
+    crop(preprocesspath, croppath, anno_csv, CROPSIZE)
 
 # Calculate mean std
 pixvlu, npix = 0, 0
@@ -318,8 +319,8 @@ def test(epoch, m):
             'net': net.module if use_cuda else net,
             'epoch': epoch,
         }
-        if not os.path.isdir(savemodelpath):
-            os.mkdir(savemodelpath)
+        if not os.path.exists(savemodelpath):
+            os.makedirs(savemodelpath)
         torch.save(state, savemodelpath+'ckptgbt.t7')
         best_acc_gbt = gbtteacc
     # Save checkpoint.
@@ -331,8 +332,10 @@ def test(epoch, m):
             'acc': acc,
             'epoch': epoch,
         }
-        if not os.path.isdir(savemodelpath):
-            os.mkdir(savemodelpath)
+        if not os.path.exists(savemodelpath):
+            os.makedirs(savemodelpath)
+
+        # Save checkpoint of best_acc
         torch.save(state, savemodelpath+'ckpt.t7')
         best_acc = acc
     logging.info('Saving..')
@@ -341,8 +344,8 @@ def test(epoch, m):
         'acc': acc,
         'epoch': epoch,
     }
-    if not os.path.isdir(savemodelpath):
-        os.mkdir(savemodelpath)
+    if not os.path.exists(savemodelpath):
+        os.makedirs(savemodelpath)
     if epoch % 50 == 0:
         torch.save(state, savemodelpath+'ckpt'+str(epoch)+'.t7')
     # best_acc = acc

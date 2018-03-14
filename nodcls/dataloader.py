@@ -3,7 +3,7 @@ import os
 import os.path
 import numpy as np
 import torch.utils.data as data
-from main_nodcls import CROPSIZE
+CROPSIZE = 32
 
 class lunanod(data.Dataset):
     def __init__(self, npypath, fnamelst, labellst, featlst, train=True,
