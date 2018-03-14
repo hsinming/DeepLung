@@ -3,7 +3,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-from layers import *
+#from layers import *
 config = {}
 config['anchors'] = [5., 10., 20.] #[ 10.0, 30.0, 60.]
 config['chanel'] = 1

@@ -40,6 +40,7 @@ def resample(imgs, spacing, new_spacing,order=2):
         return newimg,true_spacing
     else:
         raise ValueError('wrong shape')
+
 def worldToVoxelCoord(worldCoord, origin, spacing):
      
     stretchedVoxelCoord = np.absolute(worldCoord - origin)
@@ -79,7 +80,6 @@ def process_mask(mask):
     struct = generate_binary_structure(3,1)  
     dilatedMask = binary_dilation(convex_mask,structure=struct,iterations=10) 
     return dilatedMask
-
 
 def lumTrans(img):
     lungwin = np.array([-1200.,600.])
@@ -434,32 +434,30 @@ def full_prep(train=True, val=True, test=True):
             os.mkdir(val_prep_folder)
         if not os.path.exists(test_prep_folder):
             os.mkdir(test_prep_folder)
-        #eng.addpath('preprocessing/',nargout=0)
+
         if train:
             print('starting train preprocessing')
             pool = Pool(10)
             partial_savenpy = partial(savenpy, annos=trainalllabel, filelist=trainfilelist, data_path=train_data_path, prep_folder=train_prep_folder)
             N = len(trainfilelist)
-                savenpy(1)
-            _=pool.map(partial_savenpy, range(N))
+            _=pool.map_async(partial_savenpy, range(N)).get(0xffff)
             print('end train preprocessing')
         if val:
             print('starting val preprocessing')
             partial_savenpy = partial(savenpy, annos=valalllabel, filelist=valfilelist, data_path=val_data_path, prep_folder=val_prep_folder)
             N = len(valfilelist)
-                savenpy(1)
-            _=pool.map(partial_savenpy, range(N))
+            _=pool.map_async(partial_savenpy, range(N)).get(0xffff)
             print('end val preprocessing')
         if test:
             print('starting test preprocessing')
             partial_savenpy = partial(savenpy, annos=testalllabel, filelist=testfilelist, data_path=test_data_path, prep_folder=test_prep_folder)
             N = len(testfilelist)
-                savenpy(1)
-            _=pool.map(partial_savenpy, range(N))
+            _=pool.map_async(partial_savenpy, range(N)).get(0xffff)
             pool.close()
             pool.join()
             print('end test preprocessing')
-    f= open(finished_flag,"w+")        
+    f= open(finished_flag,"w+")
+    f.close()
     
 def splitvaltestcsv():
     testfiles = []
@@ -488,11 +486,11 @@ def splitvaltestcsv():
         valfcsv.writerow(line)
     valf.close()
 
-def savenpy_luna(id, annos, filelist, luna_segment, luna_data,savepath):
+def savenpy_luna(id, annos, filelist, luna_segment, luna_data, savepath):
     islabel = True
     isClean = True
     resolution = np.array([1,1,1])
-#     resolution = np.array([2,2,2])
+
     name = filelist[id]
     
     sliceim,origin,spacing,isflip = load_itk_image(os.path.join(luna_data,name+'.mhd'))
@@ -577,24 +575,25 @@ def preprocess_luna():
     print('starting preprocessing luna')
     if not os.path.exists(finished_flag):
         annos = np.array(pandas.read_csv(luna_label))
-        pool = Pool()
+        pool = Pool(8)
         if not os.path.exists(savepath):
             os.mkdir(savepath)
         for setidx in xrange(10):
             print 'process subset', setidx
             filelist = [f.split('.mhd')[0] for f in os.listdir(luna_data+'subset'+str(setidx)) if f.endswith('.mhd') ]
+            filelist = [i for i in filelist if not os.path.exists(os.path.join(savepath, 'subset{}'.format(setidx), i+'_clean.npy'))]
             if not os.path.exists(savepath+'subset'+str(setidx)):
                 os.mkdir(savepath+'subset'+str(setidx))
             partial_savenpy_luna = partial(savenpy_luna, annos=annos, filelist=filelist,
                                        luna_segment=luna_segment, luna_data=luna_data+'subset'+str(setidx)+'/', 
                                        savepath=savepath+'subset'+str(setidx)+'/')
             N = len(filelist)
-            #savenpy(1)
-            _=pool.map(partial_savenpy_luna,range(N))
+            _=pool.map_async(partial_savenpy_luna,range(N)).get(0xffff)
         pool.close()
         pool.join()
     print('end preprocessing luna')
     f= open(finished_flag,"w+")
+    f.close()
 
 
 if __name__=='__main__':

@@ -1,6 +1,6 @@
 import torch
 from torch import nn
-from layers import *
+from layers import Loss, GetPBB
 
 config = {}
 config['anchors'] = [5., 10., 20.] #[ 10.0, 30.0, 60.]
@@ -23,10 +23,20 @@ config['r_rand_crop'] = 0.3
 config['pad_value'] = 170
 config['augtype'] = {'flip':True,'swap':False,'scale':True,'rotate':False}
 
-
-config['augtype'] = {'flip':True,'swap':False,'scale':True,'rotate':False}
 config['blacklist'] = ['868b024d9fa388b7ddab12ec1c06af38','990fbe3f0a1b53878669967b9afd1441','adc3bbc63d40f8761c59be10f1e504c3']
+# Bad preprocessing cases in LKDS dataset
+config['blacklist'] += ['LKDS-00065', 'LKDS-00150', 'LKDS-00192', 'LKDS-00238', 'LKDS-00319', 'LKDS-00353', 'LKDS-00359',
+                        'LKDS-00379', 'LKDS-00504', 'LKDS-00541', 'LKDS-00598', 'LKDS-00648', 'LKDS-00684', 'LKDS-00829',
+                        'LKDS-00926', 'LKDS-00931']
 
+# Bad cases of nodules (wrong segmentation of lung, nonspecific nodules, etc.)
+config['blacklist'] += ['060', '091', '188', '417', '868', '871', 'LKDS-00013', 'LKDS-00299',
+                        'LKDS-00314', 'LKDS-00433', 'LKDS-00465', 'LKDS-00541', 'LKDS-00598',
+                        'LKDS-00602', 'LKDS-00648', 'LKDS-00651', 'LKDS-00652', 'LKDS-00778',
+                        'LKDS-00881', 'LKDS-00931', 'LKDS-00960', 'f938f9022abf7f1072fe9df79db7eccd',
+                        'eb008af181f3791fdce2376cf4773733', '11fe5426ef497bc490b9f1465f1fb25e']
+
+config['blacklist'] = list(set(config['blacklist']))
 #config['blacklist'] = ['868b024d9fa388b7ddab12ec1c06af38','d92998a73d4654a442e6d6ba15bbb827','990fbe3f0a1b53878669967b9afd1441','820245d8b211808bd18e78ff5be16fdb','adc3bbc63d40f8761c59be10f1e504c3',
 #                       '417','077','188','876','057','087','130','468']
 

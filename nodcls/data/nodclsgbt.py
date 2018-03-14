@@ -1,9 +1,8 @@
 import numpy as np
 import pandas as pd 
-import mahotas
-from mahotas.features.lbp import lbp
+
 CROPSIZE = 17#24#30#36
-print CROPSIZE
+
 pdframe =  pd.read_csv('annotationdetclsconv_v3.csv', names=['seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm', 'malignant'])
 srslst = pdframe['seriesuid'].tolist()[1:]
 crdxlst = pdframe['coordX'].tolist()[1:]

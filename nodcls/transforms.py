@@ -11,8 +11,11 @@ import numpy as np
 import numbers
 import types
 import collections
+from scipy.ndimage.interpolation import zoom
 from torch.autograd import Variable
 torch.cuda.set_device(0)
+
+
 def resample3d(inp,inp_space,out_space=(1,1,1)):
     # Infer new shape
     # inp = torch.from_numpy(inp)
@@ -107,7 +110,7 @@ class Normalize(object):
 
         tensor.sub_(self.mean).div_(self.std)
         return tensor
-from scipy.ndimage.interpolation import zoom
+
 class RandomScale(object):
     ''' Randomly scale from scale size list '''
     def __init__(self, size, interpolation=Image.BILINEAR):
@@ -122,6 +125,7 @@ class RandomScale(object):
         # print img.shape, scale, img.shape*scale
         # print('scale', 32.0/scale)
         return zoom(img, (scale, scale, scale), mode='nearest')#resample3d(img,(32,32,32),out_space=scale)#zoom(img, scale) #img.resize(scale, self.interpolation) resample3d(img,img.shape,out_space=scale)
+
 class Scale(object):
     """Rescale the input PIL.Image to the given size.
 
@@ -181,6 +185,7 @@ class ZeroOut(object):
         # print 'zero out', x1, y1, z1, w, h, d, self.size
         img1[x1:x1+self.size, y1:y1+self.size, z1:z1+self.size] = np.array(np.zeros((self.size, self.size, self.size)))
         return np.array(img1)
+
 class ToTensor(object):
     """Convert a ``PIL.Image`` or ``numpy.ndarray`` to tensor.
 
@@ -231,6 +236,7 @@ class ToTensor(object):
             return img.float()#.div(255)
         else:
             return img
+
 class CenterCrop(object):
     """Crops the given PIL.Image at the center.
 
@@ -260,7 +266,6 @@ class CenterCrop(object):
         y1 = int(round((h - th) / 2.))
         return img.crop((x1, y1, x1 + tw, y1 + th))
 
-
 class Pad(object):
     """Pad the given PIL.Image on all sides with the given "pad" value.
 
@@ -286,7 +291,6 @@ class Pad(object):
         """
         return ImageOps.expand(img, border=self.padding, fill=self.fill)
 
-
 class Lambda(object):
     """Apply a user-defined lambda as a transform.
 
@@ -300,7 +304,6 @@ class Lambda(object):
 
     def __call__(self, img):
         return self.lambd(img)
-
 
 class RandomCrop(object):
     """Crop the given PIL.Image at a random location.

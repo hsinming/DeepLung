@@ -4,28 +4,29 @@ from __future__ import print_function
 import torch
 import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import torch.backends.cudnn as cudnn
 
-import torchvision
 import transforms as transforms
-
+from dataloader import lunanod
+import pandas as pd
 import os
 import argparse
+from sklearn.ensemble import GradientBoostingClassifier as gbt
+import pickle
 
-from models import *
+from models.dpn3d import DPN92_3D
 from utils import progress_bar
+from utils import get_mean_and_std
 from torch.autograd import Variable
 import logging
 import numpy as np
-CROPSIZE = 17
+
+CROPSIZE = 32  #17 is too small
 gbtdepth = 1
-fold = 5
-blklst = []#['1.3.6.1.4.1.14519.5.2.1.6279.6001.121993590721161347818774929286-388', \
-    # '1.3.6.1.4.1.14519.5.2.1.6279.6001.121993590721161347818774929286-389', \
-    # '1.3.6.1.4.1.14519.5.2.1.6279.6001.132817748896065918417924920957-660']
+fold = 5   # the subset for test
+blklst = []
 logging.basicConfig(filename='log-'+str(fold), level=logging.INFO)
-parser = argparse.ArgumentParser(description='PyTorch CIFAR10 Training')
+parser = argparse.ArgumentParser(description='Nodule Classifier Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
 args = parser.parse_args()
@@ -34,31 +35,79 @@ use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy
 best_acc_gbt = 0
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
-# Cal mean std
-preprocesspath = '/media/data1/wentao/tianchi/luna16/cls/crop_v3/'
+
+preprocesspath = '/data/LUNA16/preprocess_all_subsets/'
+croppath = '/data/LUNA16/crop/'
+anno_csv = './data/annotationdetclsconvfnl_v3.csv'
+
+
+def crop(preprocesspath, croppath, anno_csv):
+    pdframe = pd.read_csv(anno_csv,
+                          names=['seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm', 'malignant'])
+    srslst = pdframe['seriesuid'].tolist()[1:]
+    crdxlst = pdframe['coordX'].tolist()[1:]
+    crdylst = pdframe['coordY'].tolist()[1:]
+    crdzlst = pdframe['coordZ'].tolist()[1:]
+    dimlst = pdframe['diameter_mm'].tolist()[1:]
+    mlglst = pdframe['malignant'].tolist()[1:]
+
+    annoList = []
+    for srs, crdx, crdy, crdz, dim, mlg in zip(srslst, crdxlst, crdylst, crdzlst, dimlst, mlglst):
+        annoList.append([srs, crdx, crdy, crdz, dim, mlg])
+
+    if not os.path.exists(croppath):
+        os.makedirs(croppath)
+
+    for idx, anno in enumerate(annoList):
+        fname = anno[0]
+        pid = fname.split('-')[0]
+        crdx = int(float(anno[1]))
+        crdy = int(float(anno[2]))
+        crdz = int(float(anno[3]))
+        dim = int(float(anno[4]))
+        data = np.load(os.path.join(preprocesspath, pid + '_clean.npy'))
+        bgx = max(0, crdx - CROPSIZE / 2)
+        bgy = max(0, crdy - CROPSIZE / 2)
+        bgz = max(0, crdz - CROPSIZE / 2)
+        cropdata = np.ones((CROPSIZE, CROPSIZE, CROPSIZE)) * 170
+        cropdatatmp = np.array(data[0, bgx:bgx + CROPSIZE, bgy:bgy + CROPSIZE, bgz:bgz + CROPSIZE])
+        cropdata[CROPSIZE / 2 - cropdatatmp.shape[0] / 2:CROPSIZE / 2 - cropdatatmp.shape[0] / 2 + cropdatatmp.shape[0], \
+        CROPSIZE / 2 - cropdatatmp.shape[1] / 2:CROPSIZE / 2 - cropdatatmp.shape[1] / 2 + cropdatatmp.shape[1], \
+        CROPSIZE / 2 - cropdatatmp.shape[2] / 2:CROPSIZE / 2 - cropdatatmp.shape[2] / 2 + cropdatatmp.shape[
+            2]] = np.array(2 - cropdatatmp)
+        assert cropdata.shape[0] == CROPSIZE and cropdata.shape[1] == CROPSIZE and cropdata.shape[2] == CROPSIZE
+        np.save(os.path.join(croppath, fname + '.npy'), cropdata)
+
+crop(preprocesspath, croppath, anno_csv)
+
+# Calculate mean std
 pixvlu, npix = 0, 0
-for fname in os.listdir(preprocesspath):
+for fname in os.listdir(croppath):
     if fname.endswith('.npy'):
-        if fname[:-4] in blklst: continue
-        data = np.load(os.path.join(preprocesspath, fname))
+        if fname[:-4] in blklst:
+            continue
+        data = np.load(os.path.join(croppath, fname))
         pixvlu += np.sum(data)
         npix += np.prod(data.shape)
 pixmean = pixvlu / float(npix)
+
 pixvlu = 0
-for fname in os.listdir(preprocesspath):
+for fname in os.listdir(croppath):
     if fname.endswith('.npy'):
-        if fname[:-4] in blklst: continue
-        data = np.load(os.path.join(preprocesspath, fname))-pixmean
+        if fname[:-4] in blklst:
+            continue
+        data = np.load(os.path.join(croppath, fname))-pixmean
         pixvlu += np.sum(data * data)
 pixstd = np.sqrt(pixvlu / float(npix))
-# pixstd /= 255
-print(pixmean, pixstd)
+print('mean:{}'.format(pixmean))
+print('std:{}'.format(pixstd))
 logging.info('mean '+str(pixmean)+' std '+str(pixstd))
-# Datatransforms
+
+
+# Data transforms
 logging.info('==> Preparing data..') # Random Crop, Zero out, x z flip, scale, 
-transform_train = transforms.Compose([ 
-    # transforms.RandomScale(range(28, 38)),
-    transforms.RandomCrop(32, padding=4),
+transform_train = transforms.Compose([
+    transforms.RandomCrop(CROPSIZE, padding=4),
     transforms.RandomHorizontalFlip(),
     transforms.RandomYFlip(),
     transforms.RandomZFlip(),
@@ -71,7 +120,7 @@ transform_test = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize((pixmean), (pixstd)),
 ])
-from dataloader import lunanod
+
 # load data list
 trfnamelst = []
 trlabellst = []
@@ -79,8 +128,9 @@ trfeatlst = []
 tefnamelst = []
 telabellst = []
 tefeatlst = []
-import pandas as pd
-dataframe = pd.read_csv('/media/data1/wentao/tianchi/luna16/CSVFILES/annotationdetclsconvfnl_v3.csv', \
+
+
+dataframe = pd.read_csv(anno_csv,
                         names=['seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm', 'malignant'])
 alllst = dataframe['seriesuid'].tolist()[1:]
 labellst = dataframe['malignant'].tolist()[1:]
@@ -88,20 +138,25 @@ crdxlst = dataframe['coordX'].tolist()[1:]
 crdylst = dataframe['coordY'].tolist()[1:]
 crdzlst = dataframe['coordZ'].tolist()[1:]
 dimlst = dataframe['diameter_mm'].tolist()[1:]
+
+
 # test id
 teidlst = []
-for fname in os.listdir('/media/data1/wentao/tianchi/luna16/subset'+str(fold)+'/'):
+for fname in os.listdir('/data/LUNA16/subset'+str(fold)+'/'):
     if fname.endswith('.mhd'):
         teidlst.append(fname[:-4])
+
 mxx = mxy = mxz = mxd = 0
 for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst, dimlst):
     mxx = max(abs(float(x)), mxx)
     mxy = max(abs(float(y)), mxy)
     mxz = max(abs(float(z)), mxz)
     mxd = max(abs(float(d)), mxd)
-    if srsid in blklst: continue
+    if srsid.split('-')[0] in blklst:
+        continue
+
     # crop raw pixel as feature
-    data = np.load(os.path.join(preprocesspath, srsid+'.npy'))
+    data = np.load(os.path.join(croppath, srsid + '.npy'))
     bgx = data.shape[0]/2-CROPSIZE/2
     bgy = data.shape[1]/2-CROPSIZE/2
     bgz = data.shape[2]/2-CROPSIZE/2
@@ -109,13 +164,15 @@ for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst,
     feat = np.hstack((np.reshape(data, (-1,)) / 255, float(d)))
     # print(feat.shape)
     if srsid.split('-')[0] in teidlst:
-        tefnamelst.append(srsid+'.npy')
+        tefnamelst.append(srsid + '.npy')
         telabellst.append(int(label))
         tefeatlst.append(feat)
     else:
-        trfnamelst.append(srsid+'.npy')
+        trfnamelst.append(srsid + '.npy')
         trlabellst.append(int(label))
         trfeatlst.append(feat)
+
+
 for idx in xrange(len(trfeatlst)):
     # trfeatlst[idx][0] /= mxx
     # trfeatlst[idx][1] /= mxy
@@ -126,31 +183,31 @@ for idx in xrange(len(tefeatlst)):
     # tefeatlst[idx][1] /= mxy
     # tefeatlst[idx][2] /= mxz
     tefeatlst[idx][-1] /= mxd
-trainset = lunanod(trfnamelst, trlabellst, trfeatlst, train=True, download=True, transform=transform_train)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=16, shuffle=True, num_workers=30)
 
-testset = lunanod(tefnamelst, telabellst, tefeatlst, train=False, download=True, transform=transform_test)
-testloader = torch.utils.data.DataLoader(testset, batch_size=16, shuffle=False, num_workers=30)
-savemodelpath = './checkpoint-'+str(fold)+'/'
+
+
+trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
+                   train=True, transform=transform_train, target_transform=None, download=True)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, num_workers=8)
+
+testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, transform=transform_test,
+                  target_transform=None, download=True)
+testloader = torch.utils.data.DataLoader(testset, batch_size=8, shuffle=False, num_workers=8)
+
+
 # Model
+savemodelpath = './checkpoint-'+str(fold)+'/'
 if args.resume:
     # Load checkpoint.
     logging.info('==> Resuming from checkpoint..')
-    assert os.path.isdir('checkpoint'), 'Error: no checkpoint directory found!'
     checkpoint = torch.load(savemodelpath+'ckpt.t7')
     net = checkpoint['net']
     best_acc = checkpoint['acc']
     start_epoch = checkpoint['epoch']
 else:
     logging.info('==> Building model..')
-    # net = VGG('VGG19')
-    # net = ResNet18()
-    # net = GoogLeNet()
-    # net = DenseNet121()
-    # net = ResNeXt29_2x64d()
-    # net = MobileNet()
     net = DPN92_3D()
-    # net = ShuffleNetG2()
+
 neptime = 2
 def get_lr(epoch):
     if epoch < 150*neptime:
@@ -160,6 +217,8 @@ def get_lr(epoch):
     else:
         lr = 0.001
     return lr
+
+
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
@@ -167,8 +226,9 @@ if use_cuda:
 
 criterion = nn.CrossEntropyLoss()
 optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-from sklearn.ensemble import GradientBoostingClassifier as gbt
-import pickle
+
+
+
 # Training
 def train(epoch):
     logging.info('\nEpoch: '+str(epoch))
@@ -289,6 +349,6 @@ def test(epoch, m):
     print('teacc '+str(acc)+' bestacc '+str(best_acc)+' gbttestaccgbt '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
     logging.info('teacc '+str(acc)+' bestacc '+str(best_acc)+' ccgbt '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
 
-for epoch in range(start_epoch, start_epoch+350*neptime):#200):
+for epoch in range(start_epoch, start_epoch + 350*neptime):
     m = train(epoch)
     test(epoch, m)

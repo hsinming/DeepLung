@@ -45,11 +45,15 @@ cdylst = antclscsv['coordY'].tolist()[1:]
 cdzlst = antclscsv['coordZ'].tolist()[1:]
 dimlst = antclscsv['diameter_mm'].tolist()[1:]
 mlglst = antclscsv['malignant'].tolist()[1:]
+
+#Ground truth dictionary
 gtdct = {}
 for idx in xrange(len(srslst)):
     vlu = [float(cdxlst[idx]), float(cdylst[idx]), float(cdzlst[idx]), float(dimlst[idx]), int(mlglst[idx])]
-    if srslst[idx].split('-')[0] not in gtdct: gtdct[srslst[idx].split('-')[0]] = [vlu]
-    else: gtdct[srslst[idx].split('-')[0]].append(vlu)
+    if srslst[idx].split('-')[0] not in gtdct:
+        gtdct[srslst[idx].split('-')[0]] = [vlu]
+    else:
+        gtdct[srslst[idx].split('-')[0]].append(vlu)
 
 tedetpath = '/media/data1/wentao/CTnoddetector/training/detector/results/res18/ft96'+str(fold)+'/val'+str(ep)+'/predanno'+str(detp)+'.csv'
 # fid = open(tedetpath, 'r')
@@ -59,25 +63,29 @@ cdxlst = prdcsv['coordX'].tolist()[1:]
 cdylst = prdcsv['coordY'].tolist()[1:]
 cdzlst = prdcsv['coordZ'].tolist()[1:]
 prblst = prdcsv['probability'].tolist()[1:]
-# build dict first for rach seriesuid
+# build dict first for each seriesuid
 srsdct = {}
 for idx in xrange(len(srslst)):
     vlu = [cdxlst[idx], cdylst[idx], cdzlst[idx], prblst[idx]]
-    if srslst[idx] not in srsdct: srsdct[srslst[idx]] = [vlu]
-    else: srsdct[srslst[idx]].append(vlu)
+    if srslst[idx] not in srsdct:
+        srsdct[srslst[idx]] = [vlu]
+    else:
+        srsdct[srslst[idx]].append(vlu)
+
 # pbb path, find the mapping of csv to pbb
 pbbpth = '/media/data1/wentao/CTnoddetector/training/detector/results/res18/ft96'+str(fold)+'/val'+str(ep)+'/'
-rawpth = '/media/data1/wentao/tianchi/luna16/lunaall/'
-prppth = '/media/data1/wentao/tianchi/luna16/preprocess/lunaall/'
+rawpth = '/data/LUNA16/allset/'
+prppth = '/data/DSB2017/preprocess/'
 trudat = {}
-tefnmlst = []
-tecdxlst = []
-tecdylst = []
-tecdzlst = []
-telablst = []
-tedimlst = []
+tefnmlst = []  # Test filename list
+tecdxlst = []  # Test coordX list
+tecdylst = []  # Test coordY list
+tecdzlst = []  # Test coordZ list
+telablst = []  # Test label list
+tedimlst = []  # Test diameter list
+
 import math
-testnodmask = []
+testnodmask = []  # Test nodule mask
 for srs, vlu in srsdct.iteritems():
     pbb = np.load(os.path.join(pbbpth, srs+'_pbb.npy'))
     lbb = np.load(os.path.join(pbbpth, srs+'_lbb.npy')) # list, x y z d

@@ -6,48 +6,25 @@
 import os
 import sys
 import time
-import math
+import matplotlib
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 
+import torch
 import torch.nn as nn
 import torch.nn.init as init
 
 
-def get_mean_and_std(dataset):
-    '''Compute the mean and std value of dataset.'''
-    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2)
-    mean = torch.zeros(3)
-    std = torch.zeros(3)
-    print('==> Computing mean and std..')
-    for inputs, targets in dataloader:
-        for i in range(3):
-            mean[i] += inputs[:,i,:,:].mean()
-            std[i] += inputs[:,i,:,:].std()
-    mean.div_(len(dataset))
-    std.div_(len(dataset))
-    return mean, std
-
-def init_params(net):
-    '''Init layer parameters.'''
-    for m in net.modules():
-        if isinstance(m, nn.Conv2d):
-            init.kaiming_normal(m.weight, mode='fan_out')
-            if m.bias:
-                init.constant(m.bias, 0)
-        elif isinstance(m, nn.BatchNorm2d):
-            init.constant(m.weight, 1)
-            init.constant(m.bias, 0)
-        elif isinstance(m, nn.Linear):
-            init.normal(m.weight, std=1e-3)
-            if m.bias:
-                init.constant(m.bias, 0)
 
 
-_, term_width = os.popen('stty size', 'r').read().split()
-term_width = int(term_width)
+#_, term_width = os.popen('stty size', 'r').read().split()
+#term_width = int(term_width)
+term_width = 80
 
 TOTAL_BAR_LENGTH = 65.
 last_time = time.time()
 begin_time = last_time
+
 def progress_bar(current, total, msg=None):
     global last_time, begin_time
     if current == 0:
@@ -123,33 +100,58 @@ def format_time(seconds):
         f = '0ms'
     return f
 
-import matplotlib
-matplotlib.use('Agg')
-import numpy as np
-import matplotlib.pyplot as plt
+def get_mean_and_std(dataset):
+    '''Compute the mean and std value of dataset.'''
+    dataloader = torch.utils.data.DataLoader(dataset, batch_size=1, shuffle=True, num_workers=2)
+    mean = torch.zeros(3)
+    std = torch.zeros(3)
+    print('==> Computing mean and std..')
+    for inputs, targets in dataloader:
+        for i in range(3):
+            mean[i] += inputs[:,i,:,:].mean()
+            std[i] += inputs[:,i,:,:].std()
+    mean.div_(len(dataset))
+    std.div_(len(dataset))
+    return mean, std
+
+def init_params(net):
+    '''Init layer parameters.'''
+    for m in net.modules():
+        if isinstance(m, nn.Conv2d):
+            init.kaiming_normal(m.weight, mode='fan_out')
+            if m.bias:
+                init.constant(m.bias, 0)
+        elif isinstance(m, nn.BatchNorm2d):
+            init.constant(m.weight, 1)
+            init.constant(m.bias, 0)
+        elif isinstance(m, nn.Linear):
+            init.normal(m.weight, std=1e-3)
+            if m.bias:
+                init.constant(m.bias, 0)
+
 def plot_log(logname='/media/data1/wentao/CTnoddetector/training/nodcls/log-1'):
-    fid = open(logname, 'r')
-    flines = fid.readlines()
-    tracclst = []
-    teacclst = []
-    ep = 0
-    for line in flines:
-        if line.startswith('INFO:root:ep '+str(ep)+' tracc '):
-            acc = line.split('INFO:root:ep '+str(ep)+' tracc ')[1]
-            # print acc
-            acc = acc.split(' gbtacc ')[1]
-            # acc = acc.split(' lr ')[0]
-            # print acc
-            tracclst.append(float(acc))
-            ep += 1
-        if line.startswith('INFO:root:teacc '):
-            acc = line.split('INFO:root:teacc ')[1]
-            acc = acc.split(' bestacc ')[0]
-            # acc = acc.split(' ccgbt ')[1]
-            # acc = acc.split(' bestgbt ')[0]
-            # print acc
-            teacclst.append(float(acc))#/100)
-    fid.close()
+    with open(logname, 'r') as fid:
+        flines = fid.readlines()
+        tracclst = []
+        teacclst = []
+        ep = 0
+        for line in flines:
+            if line.startswith('INFO:root:ep '+str(ep)+' tracc '):
+                acc = line.split('INFO:root:ep '+str(ep)+' tracc ')[1]
+                # print acc
+                acc = acc.split(' gbtacc ')[1]
+                # acc = acc.split(' lr ')[0]
+                # print acc
+                tracclst.append(float(acc))
+                ep += 1
+            if line.startswith('INFO:root:teacc '):
+                acc = line.split('INFO:root:teacc ')[1]
+                acc = acc.split(' bestacc ')[0]
+                # acc = acc.split(' ccgbt ')[1]
+                # acc = acc.split(' bestgbt ')[0]
+                # print acc
+                teacclst.append(float(acc))#/100)
+
     print(max(teacclst))
     plt.plot(range(len(tracclst)), tracclst, label='train accuracy')
     plt.plot(range(len(tracclst)), teacclst, label='test accuracy')
@@ -157,4 +159,5 @@ def plot_log(logname='/media/data1/wentao/CTnoddetector/training/nodcls/log-1'):
     plt.savefig('log-1plt.png')
     # print(max(teacclst))
 
-# plot_log()
+if __name__=='__main__':
+    plot_log()

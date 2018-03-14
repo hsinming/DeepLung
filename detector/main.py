@@ -24,14 +24,14 @@ parser = argparse.ArgumentParser(description='PyTorch DataBowl3 Detector')
 parser.add_argument('--model', '-m', metavar='MODEL', default='base',
                     help='model')
 parser.add_argument('--config', '-c', default='config_training', type=str)
-parser.add_argument('-j', '--workers', default=30, type=int, metavar='N',
-                    help='number of data loading workers (default: 32)')
+parser.add_argument('-j', '--workers', default=4, type=int, metavar='N',
+                    help='number of data loading workers (default: 4)')
 parser.add_argument('--epochs', default=100, type=int, metavar='N',
                     help='number of total epochs to run')
 parser.add_argument('--start-epoch', default=0, type=int, metavar='N',
                     help='manual epoch number (useful on restarts)')
-parser.add_argument('-b', '--batch-size', default=16, type=int,
-                    metavar='N', help='mini-batch size (default: 16)')
+parser.add_argument('-b', '--batch-size', default=4, type=int,
+                    metavar='N', help='mini-batch size (default: 4)')
 parser.add_argument('--lr', '--learning-rate', default=0.01, type=float,
                     metavar='LR', help='initial learning rate')
 parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
@@ -52,7 +52,7 @@ parser.add_argument('--split', default=8, type=int, metavar='SPLIT',
                     help='In the test phase, split the image to 8 parts')
 parser.add_argument('--gpu', default='all', type=str, metavar='N',
                     help='use gpu')
-parser.add_argument('--n_test', default=4, type=int, metavar='N',
+parser.add_argument('--n_test', default=1, type=int, metavar='N',
                     help='number of gpu for test')
 
 def main():
@@ -71,14 +71,8 @@ def main():
     
     if args.resume:
         checkpoint = torch.load(args.resume)
-        # if start_epoch == 0:
-        #     start_epoch = checkpoint['epoch'] + 1
-        # if not save_dir:
-        #     save_dir = checkpoint['save_dir']
-        # else:
-        #     save_dir = os.path.join('results',save_dir)
         net.load_state_dict(checkpoint['state_dict'])
-    # else:
+
     if start_epoch == 0:
         start_epoch = 1
     if not save_dir:

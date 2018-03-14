@@ -5,7 +5,8 @@ import torch.nn.functional as F
 
 from torch.autograd import Variable
 
-debug = False #True
+debug = False
+
 class Bottleneck(nn.Module):
     def __init__(self, last_planes, in_planes, out_planes, dense_depth, stride, first_layer):
         super(Bottleneck, self).__init__()
@@ -112,7 +113,6 @@ def DPN92_3D():
         'dense_depth': (16,32,24,128)
     }
     return DPN(cfg)
-
 
 def test():
     debug = True
