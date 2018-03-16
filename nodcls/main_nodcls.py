@@ -1,5 +1,12 @@
 #!/usr/bin/python2
 from __future__ import print_function
+import pandas as pd
+import os
+import argparse
+from sklearn.ensemble import GradientBoostingClassifier as gbt
+import pickle
+import logging
+import numpy as np
 
 import torch
 import torch.nn as nn
@@ -10,16 +17,10 @@ from torch.autograd import Variable
 import transforms as transforms
 from dataloader import lunanod
 from dataloader import CROPSIZE
-import pandas as pd
-import os
-import argparse
-from sklearn.ensemble import GradientBoostingClassifier as gbt
-import pickle
-from models.dpn3d import DPN92_3D
+from dataloader import simpleCrop
+from models.dpn3d import DPN92_3D, config
 from utils import progress_bar
 
-import logging
-import numpy as np
 
 
 gbtdepth = 1
@@ -41,10 +42,10 @@ preprocesspath = '/data/LUNA16/preprocess_all_subsets/'
 croppath = '/data/LUNA16/crop/'
 anno_csv = './data/annotationdetclsconvfnl_v3.csv'
 
-
+# Crop the preprocess image to make datasets
 def crop(preprocesspath, croppath, anno_csv, cropsize):
     pdframe = pd.read_csv(anno_csv,
-                          names=['seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm', 'malignant'])
+                          names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
     srslst = pdframe['seriesuid'].tolist()[1:]
     crdxlst = pdframe['coordX'].tolist()[1:]
     crdylst = pdframe['coordY'].tolist()[1:]
@@ -71,15 +72,48 @@ def crop(preprocesspath, croppath, anno_csv, cropsize):
         bgy = max(0, crdy - cropsize / 2)
         bgz = max(0, crdz - cropsize / 2)
         cropdata = np.ones((cropsize, cropsize, cropsize)) * 170
-        cropdatatmp = np.array(data[0, bgx:bgx + cropsize, bgy:bgy + cropsize, bgz:bgz + cropsize])
-        cropdata[cropsize / 2 - cropdatatmp.shape[0] / 2:cropsize / 2 - cropdatatmp.shape[0] / 2 + cropdatatmp.shape[0], \
-        cropsize / 2 - cropdatatmp.shape[1] / 2:cropsize / 2 - cropdatatmp.shape[1] / 2 + cropdatatmp.shape[1], \
-        cropsize / 2 - cropdatatmp.shape[2] / 2:cropsize / 2 - cropdatatmp.shape[2] / 2 + cropdatatmp.shape[2]] = np.array(2 - cropdatatmp)
-        assert cropdata.shape[0] == cropsize and cropdata.shape[1] == cropsize and cropdata.shape[2] == cropsize
+        cropdatatmp = np.array(data[0, bgz:min(data.shape[1], bgz+cropsize), bgy:min(data.shape[2], bgy+cropsize), bgx:min(data.shape[3], bgx+cropsize)])
+        cropdata[:cropdatatmp.shape[0], :cropdatatmp.shape[1], :cropdatatmp.shape[2]] = np.array(cropdatatmp)
+        assert cropdata.shape == (cropsize, cropsize, cropsize)
         np.save(os.path.join(croppath, fname + '.npy'), cropdata)
 
+def crop2(preprocesspath, croppath, anno_csv, cropsize):
+    pdframe = pd.read_csv(anno_csv,
+                          names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
+    srslst = pdframe['seriesuid'].tolist()[1:]
+    crdxlst = pdframe['coordX'].tolist()[1:]
+    crdylst = pdframe['coordY'].tolist()[1:]
+    crdzlst = pdframe['coordZ'].tolist()[1:]
+    dimlst = pdframe['diameter_mm'].tolist()[1:]
+    mlglst = pdframe['malignant'].tolist()[1:]
+
+    annoList = []
+    for srs, crdx, crdy, crdz, dim, mlg in zip(srslst, crdxlst, crdylst, crdzlst, dimlst, mlglst):
+        annoList.append([srs, crdx, crdy, crdz, dim, mlg])
+
+    if not os.path.exists(croppath):
+        os.makedirs(croppath)
+
+    cropper = simpleCrop(config, 'test')
+
+    for idx, anno in enumerate(annoList):
+        fname = anno[0]
+        pid = fname.split('-')[0]
+        crdx = int(float(anno[1]))
+        crdy = int(float(anno[2]))
+        crdz = int(float(anno[3]))
+        dim = int(float(anno[4]))
+        target = np.array([crdz, crdy, crdx, dim])
+        data = np.load(os.path.join(preprocesspath, pid + '_clean.npy'))
+        crop_img, _ = cropper(data, target)
+        crop_img = crop_img[0,...]
+        crop_img = crop_img.astype(np.float32)
+        np.save(os.path.join(croppath, fname + '.npy'), crop_img)
+
 if args.crop:
-    crop(preprocesspath, croppath, anno_csv, CROPSIZE)
+    #crop(preprocesspath, croppath, anno_csv, CROPSIZE)
+    crop2(preprocesspath, croppath, anno_csv, CROPSIZE)
+
 
 # Calculate mean std
 pixvlu, npix = 0, 0
@@ -132,7 +166,7 @@ tefeatlst = []
 
 
 dataframe = pd.read_csv(anno_csv,
-                        names=['seriesuid', 'coordX', 'coordY', 'coordZ', 'diameter_mm', 'malignant'])
+                        names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
 alllst = dataframe['seriesuid'].tolist()[1:]
 labellst = dataframe['malignant'].tolist()[1:]
 crdxlst = dataframe['coordX'].tolist()[1:]
@@ -147,21 +181,24 @@ for fname in os.listdir('/data/LUNA16/subset'+str(fold)+'/'):
     if fname.endswith('.mhd'):
         teidlst.append(fname[:-4])
 
+
 mxx = mxy = mxz = mxd = 0
 for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst, dimlst):
     mxx = max(abs(float(x)), mxx)
     mxy = max(abs(float(y)), mxy)
     mxz = max(abs(float(z)), mxz)
     mxd = max(abs(float(d)), mxd)
+
     if srsid.split('-')[0] in blklst:
         continue
 
     # crop raw pixel as feature
     data = np.load(os.path.join(croppath, srsid + '.npy'))
-    bgx = data.shape[0]/2-CROPSIZE/2
+    bgx = data.shape[2]/2-CROPSIZE/2
     bgy = data.shape[1]/2-CROPSIZE/2
-    bgz = data.shape[2]/2-CROPSIZE/2
-    data = np.array(data[bgx:bgx+CROPSIZE, bgy:bgy+CROPSIZE, bgz:bgz+CROPSIZE])
+    bgz = data.shape[0]/2-CROPSIZE/2
+    assert bgx==bgy==bgz==0
+    data = np.array(data[bgz:bgz+CROPSIZE, bgy:bgy+CROPSIZE, bgx:bgx+CROPSIZE])
     feat = np.hstack((np.reshape(data, (-1,)) / 255, float(d)))
     # print(feat.shape)
     if srsid.split('-')[0] in teidlst:
@@ -254,7 +291,8 @@ def train(epoch):
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
         inputs, targets = Variable(inputs), Variable(targets)
-        outputs, dfeat = net(inputs) 
+        outputs, dfeat = net(inputs)
+
         # add feature into the array
         # print(torch.stack(targets).data.numpy().shape, torch.stack(feat).data.numpy().shape)
         # print((dfeat.data).cpu().numpy().shape)
@@ -323,7 +361,8 @@ def test(epoch, m):
             os.makedirs(savemodelpath)
         torch.save(state, savemodelpath+'ckptgbt.t7')
         best_acc_gbt = gbtteacc
-    # Save checkpoint.
+
+    # Save checkpoint of best_acc
     acc = 100.*correct/total
     if acc > best_acc:
         logging.info('Saving..')
@@ -334,10 +373,11 @@ def test(epoch, m):
         }
         if not os.path.exists(savemodelpath):
             os.makedirs(savemodelpath)
-
-        # Save checkpoint of best_acc
         torch.save(state, savemodelpath+'ckpt.t7')
         best_acc = acc
+
+
+    # Save every 50 epochs
     logging.info('Saving..')
     state = {
         'net': net.module if use_cuda else net,
@@ -348,8 +388,10 @@ def test(epoch, m):
         os.makedirs(savemodelpath)
     if epoch % 50 == 0:
         torch.save(state, savemodelpath+'ckpt'+str(epoch)+'.t7')
-    # best_acc = acc
+
+    # Show and log metrics
     print('teacc '+str(acc)+' bestacc '+str(best_acc)+' gbttestaccgbt '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
+    print()
     logging.info('teacc '+str(acc)+' bestacc '+str(best_acc)+' ccgbt '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
 
 for epoch in range(start_epoch, start_epoch + 350*neptime):

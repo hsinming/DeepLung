@@ -1,9 +1,17 @@
 '''Dual Path Networks in PyTorch.'''
+import numpy as np
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from torch.autograd import Variable
+config = {}
+config['crop_size'] = [32, 32, 32]
+config['scaleLim'] = [0.85, 1.15]
+config['radiusLim'] = [6, 100]
+config['jitter_range'] = 0.15
+config['stride'] = 4
+config['augtype'] = {'flip':True,'swap':False,'rotate':False,'scale':False}
+config['filling_value'] = 160
 
 debug = False
 
