@@ -82,6 +82,7 @@ class simpleCrop():
         self.phase = phase
 
     def __call__(self, imgs, target):
+        assert len(imgs.shape)==4
         if self.isScale:
             radiusLim = self.radiusLim
             scaleLim = self.scaleLim

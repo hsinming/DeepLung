@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import argparse
 from sklearn.ensemble import GradientBoostingClassifier as gbt
-import pickle
+import cPickle as pickle
 import logging
 import numpy as np
 
@@ -23,14 +23,18 @@ from utils import progress_bar
 
 
 
-gbtdepth = 1
-fold = 9   # the subset for test
+gbtdepth = 2
+fold = 0   # the subset for test
 blklst = []
 logging.basicConfig(filename='log-'+str(fold), level=logging.INFO)
 parser = argparse.ArgumentParser(description='Nodule Classifier Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--resume', '-r', action='store_true', help='resume from checkpoint')
-parser.add_argument('--crop', default=False, type=bool, help='crop 3D bounding box from preprocess images')
+parser.add_argument('--crop', action='store_true', help='crop 3D bounding box from preprocess images')
+parser.add_argument('--save_dir', '-s', default='./checkpoint-{}/'.format(fold), type=str, metavar='PATH',
+                    help='directory to save checkpoint (default: ./checkpoint-{fold}/)')
+parser.add_argument('--checkpoint', '--ckpt', default='ckpt.t7', type=str, metavar='FILENAME',
+                    help='filename of the previous checkpoint (default: none)')
+
 args = parser.parse_args()
 
 use_cuda = torch.cuda.is_available()
@@ -38,12 +42,12 @@ best_acc = 0  # best test accuracy
 best_acc_gbt = 0
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
 
-preprocesspath = '/data/LUNA16/preprocess_all_subsets/'
-croppath = '/data/LUNA16/crop/'
+preprocesspath = '/data/preprocess/luna_preprocess/'
+croppath = './crop/'
 anno_csv = './data/annotationdetclsconvfnl_v3.csv'
 
 # Crop the preprocess image to make datasets
-def crop(preprocesspath, croppath, anno_csv, cropsize):
+def crop1(preprocesspath, croppath, anno_csv, cropsize):
     pdframe = pd.read_csv(anno_csv,
                           names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
     srslst = pdframe['seriesuid'].tolist()[1:]
@@ -111,8 +115,11 @@ def crop2(preprocesspath, croppath, anno_csv, cropsize):
         np.save(os.path.join(croppath, fname + '.npy'), crop_img)
 
 if args.crop:
-    #crop(preprocesspath, croppath, anno_csv, CROPSIZE)
-    crop2(preprocesspath, croppath, anno_csv, CROPSIZE)
+    try:
+        crop2(preprocesspath, croppath, anno_csv, CROPSIZE)
+        print('Crop is done.')
+    except:
+        pass
 
 
 # Calculate mean std
@@ -176,19 +183,14 @@ dimlst = dataframe['diameter_mm'].tolist()[1:]
 
 
 # test id
+print('Using subset{} as test split.'.format(fold))
 teidlst = []
 for fname in os.listdir('/data/LUNA16/subset'+str(fold)+'/'):
     if fname.endswith('.mhd'):
         teidlst.append(fname[:-4])
 
 
-mxx = mxy = mxz = mxd = 0
 for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst, dimlst):
-    mxx = max(abs(float(x)), mxx)
-    mxy = max(abs(float(y)), mxy)
-    mxz = max(abs(float(z)), mxz)
-    mxd = max(abs(float(d)), mxd)
-
     if srsid.split('-')[0] in blklst:
         continue
 
@@ -211,17 +213,6 @@ for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst,
         trfeatlst.append(feat)
 
 
-for idx in xrange(len(trfeatlst)):
-    # trfeatlst[idx][0] /= mxx
-    # trfeatlst[idx][1] /= mxy
-    # trfeatlst[idx][2] /= mxz
-    trfeatlst[idx][-1] /= mxd
-for idx in xrange(len(tefeatlst)):
-    # tefeatlst[idx][0] /= mxx
-    # tefeatlst[idx][1] /= mxy
-    # tefeatlst[idx][2] /= mxz
-    tefeatlst[idx][-1] /= mxd
-
 
 
 trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
@@ -234,17 +225,25 @@ testloader = torch.utils.data.DataLoader(testset, batch_size=8, shuffle=False, n
 
 
 # Model
-savemodelpath = './checkpoint-'+str(fold)+'/'
-if args.resume:
+savemodelpath = args.save_dir
+if not os.path.exists(savemodelpath):
+    os.makedirs(savemodelpath)
+
+net = DPN92_3D()
+
+if args.checkpoint:
     # Load checkpoint.
-    logging.info('==> Resuming from checkpoint..')
-    checkpoint = torch.load(savemodelpath+'ckpt.t7')
-    net = checkpoint['net']
-    best_acc = checkpoint['acc']
-    start_epoch = checkpoint['epoch']
+    logging.info('==> Resuming from {}'.format(args.checkpoint))
+    checkpoint = torch.load(os.path.join(savemodelpath, args.checkpoint))
+    net.load_state_dict(checkpoint['state_dict'])
+    m = pickle.load(open(os.path.join(savemodelpath,'gbtmodel.sav'), 'rb'))
+    best_acc = checkpoint['best_acc']
+    best_acc_gbt = checkpoint['best_acc_gbt']
+    start_epoch = checkpoint['epoch'] + 1
 else:
     logging.info('==> Building model..')
-    net = DPN92_3D()
+    m = gbt(max_depth=gbtdepth, random_state=0)
+
 
 neptime = 2
 def get_lr(epoch):
@@ -256,16 +255,15 @@ def get_lr(epoch):
         lr = 0.001
     return lr
 
+# Define loss function (criterion) and optimizer
+criterion = nn.CrossEntropyLoss()
+optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
 
 if use_cuda:
     net.cuda()
     net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
+    criterion = criterion.cuda()
     cudnn.benchmark = False #True
-
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
-
-
 
 # Training
 def train(epoch):
@@ -309,15 +307,16 @@ def train(epoch):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        progress_bar(batch_idx, len(trainloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+        progress_bar(batch_idx, len(trainloader), 'Train Loss: %.3f | Train Acc: %.3f%% (%d/%d)'
             % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
-    m = gbt(max_depth=gbtdepth, random_state=0)
+
     m.fit(trainfeat, trainlabel)
-    gbttracc = np.mean(m.predict(trainfeat) == trainlabel)
-    print('ep '+str(epoch)+' tracc '+str(correct/float(total))+' lr '+str(lr)+' gbtacc '+str(gbttracc))
-    logging.info('ep '+str(epoch)+' tracc '+str(correct/float(total))+' lr '+str(lr)+' gbtacc '+str(gbttracc))
+    gbttracc = 100.*np.mean(m.predict(trainfeat) == trainlabel)
+    print('ep '+str(epoch)+' tracc '+str(correct/float(total)*100.)+' lr '+str(lr)+' gbtacc '+str(gbttracc))
+    logging.info('ep '+str(epoch)+' tracc '+str(correct/float(total)*100.)+' lr '+str(lr)+' gbtacc '+str(gbttracc))
     return m
 
+#Validation
 def test(epoch, m):
     global best_acc
     global best_acc_gbt
@@ -345,54 +344,62 @@ def test(epoch, m):
         _, predicted = torch.max(outputs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        progress_bar(batch_idx, len(testloader), 'Loss: %.3f | Acc: %.3f%% (%d/%d)'
+        progress_bar(batch_idx, len(testloader), 'Test Loss: %.3f | Test Acc: %.3f%% (%d/%d)'
             % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
 
     # print(testlabel.shape, testfeat.shape, testlabel)#, trainfeat[:, 3])
-    gbtteacc = np.mean(m.predict(testfeat) == testlabel)
+    gbtteacc = 100.*np.mean(m.predict(testfeat) == testlabel)
     if gbtteacc > best_acc_gbt:
-        pickle.dump(m, open('gbtmodel-'+str(fold)+'.sav', 'wb'))
+        pickle.dump(m, open(os.path.join(savemodelpath,'gbtmodel.sav'.format(fold)), 'wb'))
         logging.info('Saving gbt ..')
-        state = {
-            'net': net.module if use_cuda else net,
-            'epoch': epoch,
-        }
-        if not os.path.exists(savemodelpath):
-            os.makedirs(savemodelpath)
-        torch.save(state, savemodelpath+'ckptgbt.t7')
+        state_dict = net.module.state_dict()
+        state_dict = {k: v.cpu() for k, v in state_dict.items()}
+        state = {'epoch': epoch,
+                 'save_dir': savemodelpath,
+                 'state_dict': state_dict,
+                 'args': args,
+                 'lr': get_lr(epoch),
+                 'best_acc': best_acc,
+                 'best_acc_gbt': best_acc_gbt}
+        torch.save(state, os.path.join(savemodelpath, 'ckptgbt.t7'))
         best_acc_gbt = gbtteacc
 
     # Save checkpoint of best_acc
     acc = 100.*correct/total
     if acc > best_acc:
         logging.info('Saving..')
-        state = {
-            'net': net.module if use_cuda else net,
-            'acc': acc,
-            'epoch': epoch,
-        }
-        if not os.path.exists(savemodelpath):
-            os.makedirs(savemodelpath)
-        torch.save(state, savemodelpath+'ckpt.t7')
+        state_dict = net.module.state_dict()
+        state_dict = {k: v.cpu() for k, v in state_dict.items()}
+        state = {'epoch': epoch,
+                 'save_dir': savemodelpath,
+                 'state_dict': state_dict,
+                 'args': args,
+                 'lr': get_lr(epoch),
+                 'best_acc': best_acc,
+                 'best_acc_gbt': best_acc_gbt}
+        torch.save(state, os.path.join(savemodelpath, 'ckpt.t7'))
         best_acc = acc
 
 
     # Save every 50 epochs
     logging.info('Saving..')
-    state = {
-        'net': net.module if use_cuda else net,
-        'acc': acc,
-        'epoch': epoch,
-    }
-    if not os.path.exists(savemodelpath):
-        os.makedirs(savemodelpath)
+    state_dict = net.module.state_dict()
+    state_dict = {k: v.cpu() for k, v in state_dict.items()}
+    state = {'epoch': epoch,
+             'save_dir': savemodelpath,
+             'state_dict': state_dict,
+             'args': args,
+             'lr': get_lr(epoch),
+             'best_acc': best_acc,
+             'best_acc_gbt': best_acc_gbt}
     if epoch % 50 == 0:
         torch.save(state, savemodelpath+'ckpt'+str(epoch)+'.t7')
 
     # Show and log metrics
-    print('teacc '+str(acc)+' bestacc '+str(best_acc)+' gbttestaccgbt '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
+    print('teacc '+str(acc)+' bestacc '+str(best_acc)+' gbtteacc '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
     print()
-    logging.info('teacc '+str(acc)+' bestacc '+str(best_acc)+' ccgbt '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
+    logging.info('teacc '+str(acc)+' bestacc '+str(best_acc)+' gbtteacc '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
+
 
 for epoch in range(start_epoch, start_epoch + 350*neptime):
     m = train(epoch)

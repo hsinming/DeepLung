@@ -1,5 +1,5 @@
 '''Dual Path Networks in PyTorch.'''
-import numpy as np
+from __future__ import print_function
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -38,18 +38,18 @@ class Bottleneck(nn.Module):
             )
 
     def forward(self, x):
-        # print 'bottleneck_0', x.size(), self.last_planes, self.in_planes, 1
+        if debug: print('bottleneck_0', x.size(), self.last_planes, self.in_planes, 1)
         out = F.relu(self.bn1(self.conv1(x)))
-        # print 'bottleneck_1', out.size(), self.in_planes, self.in_planes, 3
+        if debug: print('bottleneck_1', out.size(), self.in_planes, self.in_planes, 3)
         out = F.relu(self.bn2(self.conv2(out)))
-        # print 'bottleneck_2', out.size(), self.in_planes, self.out_planes+self.dense_depth, 1
+        if debug: print('bottleneck_2', out.size(), self.in_planes, self.out_planes+self.dense_depth, 1)
         out = self.bn3(self.conv3(out))
-        # print 'bottleneck_3', out.size()
+        if debug: print('bottleneck_3', out.size())
         x = self.shortcut(x)
         d = self.out_planes
-        # print 'bottleneck_4', x.size(), self.last_planes, self.out_planes+self.dense_depth, d
+        if debug: print('bottleneck_4', x.size(), self.last_planes, self.out_planes+self.dense_depth, d)
         out = torch.cat([x[:,:d,:,:]+out[:,:d,:,:], x[:,d:,:,:], out[:,d:,:,:]], 1)
-        # print 'bottleneck_5', out.size()
+        if debug: print('bottleneck_5', out.size())
         out = F.relu(out)
         return out
 
@@ -59,11 +59,6 @@ class DPN(nn.Module):
         super(DPN, self).__init__()
         in_planes, out_planes = cfg['in_planes'], cfg['out_planes']
         num_blocks, dense_depth = cfg['num_blocks'], cfg['dense_depth']
-
-        # self.in_planes = in_planes
-        # self.out_planes = out_planes
-        # self.num_blocks = num_blocks
-        # self.dense_depth = dense_depth
 
         self.conv1 = nn.Conv3d(1, 64, kernel_size=3, stride=1, padding=1, bias=False)
         self.bn1 = nn.BatchNorm3d(64)
@@ -80,27 +75,27 @@ class DPN(nn.Module):
         for i,stride in enumerate(strides):
             layers.append(Bottleneck(self.last_planes, in_planes, out_planes, dense_depth, stride, i==0))
             self.last_planes = out_planes + (i+2) * dense_depth
-            # print '_make_layer', i, layers[-1].size()
+            if debug: print('_make_layer', i, layers[-1].size())
         return nn.Sequential(*layers)
 
     def forward(self, x):
-        if debug: print '0', x.size(), 64
+        if debug: print('0', x.size(), 64)
         out = F.relu(self.bn1(self.conv1(x)))
-        if debug: print '1', out.size()
+        if debug: print('1', out.size())
         out = self.layer1(out)
-        if debug: print '2', out.size()
+        if debug: print('2', out.size())
         out = self.layer2(out)
-        if debug: print '3', out.size()
+        if debug: print('3', out.size())
         out = self.layer3(out)
-        if debug: print '4', out.size()
+        if debug: print('4', out.size())
         out = self.layer4(out)
-        if debug: print '5', out.size()
+        if debug: print('5', out.size())
         out = F.avg_pool3d(out, 4)
-        if debug: print '6', out.size()
+        if debug: print('6', out.size())
         out_1 = out.view(out.size(0), -1)
-        if debug: print '7', out_1.size()
+        if debug: print('7', out_1.size())
         out = self.linear(out_1)
-        if debug: print '8', out.size()
+        if debug: print('8', out.size())
         return out, out_1
 
 
@@ -123,10 +118,10 @@ def DPN92_3D():
     return DPN(cfg)
 
 def test():
-    debug = True
     net = DPN92_3D()
     x = Variable(torch.randn(1,1,32,32,32))
     y = net(x)
     print(y)
 
-# test()
+if __name__=='__main__':
+    test()

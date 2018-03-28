@@ -3,10 +3,11 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.autograd import Variable
-#from layers import *
+from layers import GetPBB, Loss
+
 config = {}
 config['anchors'] = [5., 10., 20.] #[ 10.0, 30.0, 60.]
-config['chanel'] = 1
+config['channel'] = 1
 config['crop_size'] = [96, 96, 96]
 config['stride'] = 4
 config['max_stride'] = 16
@@ -24,9 +25,8 @@ config['aug_scale'] = True
 config['r_rand_crop'] = 0.3
 config['pad_value'] = 170
 config['augtype'] = {'flip':True,'swap':False,'scale':True,'rotate':False}
-config['augtype'] = {'flip':True,'swap':False,'scale':True,'rotate':False}
 config['blacklist'] = ['868b024d9fa388b7ddab12ec1c06af38','990fbe3f0a1b53878669967b9afd1441','adc3bbc63d40f8761c59be10f1e504c3']
-debug = True #True #True#False #True
+debug = False
 
 class Bottleneck(nn.Module):
     def __init__(self, last_planes, in_planes, out_planes, dense_depth, stride, first_layer):
@@ -168,11 +168,11 @@ def get_model():
 
 
 def test():
-    debug = True
     net = DPN92_3D()
     x = Variable(torch.randn(1,1,96,96,96))
     crd = Variable(torch.randn(1,3,24,24,24))
     y = net(x, crd)
-    # print(y)
+    print(y)
 
-test()
+if __name__=='__main__':
+    test()
