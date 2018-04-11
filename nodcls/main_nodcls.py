@@ -32,7 +32,7 @@ parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
 parser.add_argument('--crop', action='store_true', help='crop 3D bounding box from preprocess images')
 parser.add_argument('--save_dir', '-s', default='./checkpoint-{}/'.format(fold), type=str, metavar='PATH',
                     help='directory to save checkpoint (default: ./checkpoint-{fold}/)')
-parser.add_argument('--checkpoint', '--ckpt', default='ckpt.t7', type=str, metavar='FILENAME',
+parser.add_argument('--checkpoint', '--ckpt', default='', type=str, metavar='FILENAME',
                     help='filename of the previous checkpoint (default: none)')
 
 args = parser.parse_args()
@@ -217,11 +217,11 @@ for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst,
 
 trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
                    train=True, transform=transform_train, target_transform=None, download=True)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=8, shuffle=True, num_workers=8)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=20, shuffle=True, num_workers=8)
 
 testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, transform=transform_test,
                   target_transform=None, download=True)
-testloader = torch.utils.data.DataLoader(testset, batch_size=8, shuffle=False, num_workers=8)
+testloader = torch.utils.data.DataLoader(testset, batch_size=20, shuffle=False, num_workers=8)
 
 
 # Model

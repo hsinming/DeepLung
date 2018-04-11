@@ -1,15 +1,6 @@
 import os
-import shutil
+from config_training import config
 import numpy as np
-import sys
-# sys.path.append('./')
-# import config_training
-from config_training import config 
-# config = config_training.config
-from scipy.io import loadmat
-import numpy as np
-import h5py
-import pandas
 import scipy
 from scipy.ndimage.interpolation import zoom
 from skimage import measure
@@ -19,7 +10,6 @@ from skimage.morphology import convex_hull_image
 import pandas
 from multiprocessing import Pool
 from functools import partial
-
 import warnings
 
 def resample(imgs, spacing, new_spacing,order=2):

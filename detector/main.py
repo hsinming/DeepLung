@@ -52,7 +52,7 @@ parser.add_argument('--split', default=8, type=int, metavar='SPLIT',
                     help='In the test phase, split the image to 8 parts')
 parser.add_argument('--gpu', default='all', type=str, metavar='N',
                     help='use gpu')
-parser.add_argument('--n_test', default=1, type=int, metavar='N',
+parser.add_argument('--n_test', default=4, type=int, metavar='N',
                     help='number of gpu for test')
 
 def main():
