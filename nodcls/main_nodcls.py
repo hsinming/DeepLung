@@ -25,7 +25,14 @@ from utils import progress_bar
 
 gbtdepth = 2
 fold = 0   # the subset for test
-blklst = []
+blklst = ['1.3.6.1.4.1.14519.5.2.1.6279.6001.111258527162678142285870245028',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.121993590721161347818774929286',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.144883090372691745980459537053',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.148447286464082095534651426689',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.250397690690072950000431855143',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.295420274214095686326263147663',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.776800177074349870648765614630',
+          '1.3.6.1.4.1.14519.5.2.1.6279.6001.943403138251347598519939390311']
 logging.basicConfig(filename='log-'+str(fold), level=logging.INFO)
 parser = argparse.ArgumentParser(description='Nodule Classifier Training')
 parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
@@ -173,16 +180,16 @@ tefeatlst = []
 
 
 dataframe = pd.read_csv(anno_csv,
-                        names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
-alllst = dataframe['seriesuid'].tolist()[1:]
-labellst = dataframe['malignant'].tolist()[1:]
-crdxlst = dataframe['coordX'].tolist()[1:]
-crdylst = dataframe['coordY'].tolist()[1:]
-crdzlst = dataframe['coordZ'].tolist()[1:]
-dimlst = dataframe['diameter_mm'].tolist()[1:]
+                        names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'], header=1)
+alllst = dataframe['seriesuid'].tolist()
+labellst = dataframe['malignant'].tolist()
+crdxlst = dataframe['coordX'].tolist()
+crdylst = dataframe['coordY'].tolist()
+crdzlst = dataframe['coordZ'].tolist()
+dimlst = dataframe['diameter_mm'].tolist()
 
 
-# test id
+# make a test dataset
 print('Using subset{} as test split.'.format(fold))
 teidlst = []
 for fname in os.listdir('/data/LUNA16/subset'+str(fold)+'/'):
@@ -217,11 +224,11 @@ for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst,
 
 trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
                    train=True, transform=transform_train, target_transform=None, download=True)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=20, shuffle=True, num_workers=8)
+trainloader = torch.utils.data.DataLoader(trainset, batch_size=24, shuffle=True, num_workers=8)
 
 testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, transform=transform_test,
                   target_transform=None, download=True)
-testloader = torch.utils.data.DataLoader(testset, batch_size=20, shuffle=False, num_workers=8)
+testloader = torch.utils.data.DataLoader(testset, batch_size=24, shuffle=False, num_workers=8)
 
 
 # Model
@@ -261,7 +268,7 @@ optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5
 
 if use_cuda:
     net.cuda()
-    net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))
+    net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))   # use all GPU
     criterion = criterion.cuda()
     cudnn.benchmark = False #True
 
