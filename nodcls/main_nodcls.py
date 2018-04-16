@@ -147,7 +147,7 @@ for fname in os.listdir(croppath):
             continue
         data = np.load(os.path.join(croppath, fname))-pixmean
         pixvlu += np.sum(data * data)
-pixstd = np.sqrt(pixvlu / float(npix))
+pixstd = np.sqrt(pixvlu / float(npix-1))
 print('mean:{}'.format(pixmean))
 print('std:{}'.format(pixstd))
 logging.info('mean '+str(pixmean)+' std '+str(pixstd))
@@ -189,7 +189,7 @@ crdzlst = dataframe['coordZ'].tolist()
 dimlst = dataframe['diameter_mm'].tolist()
 
 
-# make a test dataset
+# Make a test dataset
 print('Using subset{} as test split.'.format(fold))
 teidlst = []
 for fname in os.listdir('/data/LUNA16/subset'+str(fold)+'/'):
@@ -231,7 +231,7 @@ testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, tran
 testloader = torch.utils.data.DataLoader(testset, batch_size=24, shuffle=False, num_workers=8)
 
 
-# Model
+# prepare Model
 savemodelpath = args.save_dir
 if not os.path.exists(savemodelpath):
     os.makedirs(savemodelpath)
@@ -337,7 +337,7 @@ def test(epoch, m):
     for batch_idx, (inputs, targets, feat) in enumerate(testloader):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
-        inputs, targets = Variable(inputs, volatile=True), Variable(targets)
+        inputs, targets = Variable(inputs, volatile=True), Variable(targets, volatile=True)
         outputs, dfeat = net(inputs)
         # add feature into the array
         testfeat[idx:idx+len(targets), :2560] = np.array((dfeat.data).cpu().numpy())
