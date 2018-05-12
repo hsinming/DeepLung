@@ -14,9 +14,9 @@ import torch
 import torch.nn as nn
 import torch.nn.init as init
 
-_, term_width = os.popen('stty size', 'r').read().split()
-term_width = int(term_width)
-#term_width = 118
+# _, term_width = os.popen('stty size', 'r').read().split()
+# term_width = int(term_width)
+term_width = 118
 
 TOTAL_BAR_LENGTH = int(0.4*term_width)
 last_time = time.time()

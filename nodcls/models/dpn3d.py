@@ -1,3 +1,5 @@
+#!/usr/bin/python2
+#coding=utf-8
 '''Dual Path Networks in PyTorch.'''
 from __future__ import print_function
 import torch

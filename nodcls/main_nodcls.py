@@ -2,6 +2,7 @@
 from __future__ import print_function
 import pandas as pd
 import os
+import sys
 import argparse
 from sklearn.ensemble import GradientBoostingClassifier as gbt
 import cPickle as pickle
@@ -21,10 +22,6 @@ from dataloader import simpleCrop
 from models.dpn3d import DPN92_3D, config
 from utils import progress_bar
 
-
-
-gbtdepth = 2
-fold = 0   # the subset for test
 blklst = ['1.3.6.1.4.1.14519.5.2.1.6279.6001.111258527162678142285870245028',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.121993590721161347818774929286',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.144883090372691745980459537053',
@@ -33,27 +30,26 @@ blklst = ['1.3.6.1.4.1.14519.5.2.1.6279.6001.111258527162678142285870245028',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.295420274214095686326263147663',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.776800177074349870648765614630',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.943403138251347598519939390311']
-logging.basicConfig(filename='log-'+str(fold), level=logging.INFO)
-parser = argparse.ArgumentParser(description='Nodule Classifier Training')
-parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
-parser.add_argument('--crop', action='store_true', help='crop 3D bounding box from preprocess images')
-parser.add_argument('--save_dir', '-s', default='./checkpoint-{}/'.format(fold), type=str, metavar='PATH',
-                    help='directory to save checkpoint (default: ./checkpoint-{fold}/)')
-parser.add_argument('--checkpoint', '--ckpt', default='', type=str, metavar='FILENAME',
-                    help='filename of the previous checkpoint (default: none)')
-
-args = parser.parse_args()
-
+gbtdepth = 2
+fold = 0   # the subset for test
+neptime = 2
 use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy
 best_acc_gbt = 0
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
+logging.basicConfig(filename='log-'+str(fold), level=logging.INFO)
 
-preprocesspath = '/data/preprocess/luna_preprocess/'
-croppath = './crop/'
-anno_csv = './data/annotationdetclsconvfnl_v3.csv'
+def parse_args():
+    parser = argparse.ArgumentParser(description='Nodule Classifier Training')
+    parser.add_argument('--lr', default=0.1, type=float, help='learning rate')
+    parser.add_argument('--crop', action='store_true', help='crop 3D bounding box from preprocess images')
+    parser.add_argument('--save_dir', '-s', default='./checkpoint-{}/'.format(fold), type=str, metavar='PATH',
+                        help='directory to save checkpoint (default: ./checkpoint-{fold}/)')
+    parser.add_argument('--checkpoint', '--ckpt', default='', type=str, metavar='FILENAME',
+                        help='filename of the previous checkpoint (default: none)')
+    args = parser.parse_args()
+    return args
 
-# Crop the preprocess image to make datasets
 def crop1(preprocesspath, croppath, anno_csv, cropsize):
     pdframe = pd.read_csv(anno_csv,
                           names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
@@ -88,15 +84,16 @@ def crop1(preprocesspath, croppath, anno_csv, cropsize):
         assert cropdata.shape == (cropsize, cropsize, cropsize)
         np.save(os.path.join(croppath, fname + '.npy'), cropdata)
 
-def crop2(preprocesspath, croppath, anno_csv, cropsize):
+def crop2(preprocesspath, croppath, anno_csv, config):
     pdframe = pd.read_csv(anno_csv,
-                          names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'])
-    srslst = pdframe['seriesuid'].tolist()[1:]
-    crdxlst = pdframe['coordX'].tolist()[1:]
-    crdylst = pdframe['coordY'].tolist()[1:]
-    crdzlst = pdframe['coordZ'].tolist()[1:]
-    dimlst = pdframe['diameter_mm'].tolist()[1:]
-    mlglst = pdframe['malignant'].tolist()[1:]
+                          names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'],
+                          header=0)
+    srslst = pdframe['seriesuid'].tolist()
+    crdxlst = pdframe['coordX'].tolist()
+    crdylst = pdframe['coordY'].tolist()
+    crdzlst = pdframe['coordZ'].tolist()
+    dimlst = pdframe['diameter_mm'].tolist()
+    mlglst = pdframe['malignant'].tolist()
 
     annoList = []
     for srs, crdx, crdy, crdz, dim, mlg in zip(srslst, crdxlst, crdylst, crdzlst, dimlst, mlglst):
@@ -120,139 +117,34 @@ def crop2(preprocesspath, croppath, anno_csv, cropsize):
         crop_img = crop_img[0,...]
         crop_img = crop_img.astype(np.float32)
         np.save(os.path.join(croppath, fname + '.npy'), crop_img)
+        progress_bar(idx, len(annoList), 'Crop nodule: {}/{}'.format(idx, len(annoList)))
+    print('Crop done.')
 
-if args.crop:
-    try:
-        crop2(preprocesspath, croppath, anno_csv, CROPSIZE)
-        print('Crop is done.')
-    except:
-        pass
+def get_mean_and_std(croppath, blklst):
+    # Calculate mean std
+    pixvlu, npix = 0, 0
+    for fname in os.listdir(croppath):
+        if fname.endswith('.npy'):
+            if fname[:-4] in blklst:
+                continue
+            data = np.load(os.path.join(croppath, fname))
+            pixvlu += np.sum(data)
+            npix += np.prod(data.shape)
+    pixmean = pixvlu / float(npix)
 
+    pixvlu = 0
+    for fname in os.listdir(croppath):
+        if fname.endswith('.npy'):
+            if fname[:-4] in blklst:
+                continue
+            data = np.load(os.path.join(croppath, fname))-pixmean
+            pixvlu += np.sum(data * data)
+    pixstd = np.sqrt(pixvlu / float(npix-1))
+    print('mean:{}'.format(pixmean))
+    print('std:{}'.format(pixstd))
+    logging.info('mean '+str(pixmean)+' std '+str(pixstd))
+    return pixmean, pixstd
 
-# Calculate mean std
-pixvlu, npix = 0, 0
-for fname in os.listdir(croppath):
-    if fname.endswith('.npy'):
-        if fname[:-4] in blklst:
-            continue
-        data = np.load(os.path.join(croppath, fname))
-        pixvlu += np.sum(data)
-        npix += np.prod(data.shape)
-pixmean = pixvlu / float(npix)
-
-pixvlu = 0
-for fname in os.listdir(croppath):
-    if fname.endswith('.npy'):
-        if fname[:-4] in blklst:
-            continue
-        data = np.load(os.path.join(croppath, fname))-pixmean
-        pixvlu += np.sum(data * data)
-pixstd = np.sqrt(pixvlu / float(npix-1))
-print('mean:{}'.format(pixmean))
-print('std:{}'.format(pixstd))
-logging.info('mean '+str(pixmean)+' std '+str(pixstd))
-
-
-# Data transforms
-logging.info('==> Preparing data..') # Random Crop, Zero out, x z flip, scale, 
-transform_train = transforms.Compose([
-    transforms.RandomCrop(CROPSIZE, padding=4),
-    transforms.RandomHorizontalFlip(),
-    transforms.RandomYFlip(),
-    transforms.RandomZFlip(),
-    transforms.ZeroOut(4),
-    transforms.ToTensor(),
-    transforms.Normalize((pixmean), (pixstd)), # need to cal mean and std, revise norm func
-])
-
-transform_test = transforms.Compose([
-    transforms.ToTensor(),
-    transforms.Normalize((pixmean), (pixstd)),
-])
-
-# load data list
-trfnamelst = []
-trlabellst = []
-trfeatlst = []
-tefnamelst = []
-telabellst = []
-tefeatlst = []
-
-
-dataframe = pd.read_csv(anno_csv,
-                        names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'], header=1)
-alllst = dataframe['seriesuid'].tolist()
-labellst = dataframe['malignant'].tolist()
-crdxlst = dataframe['coordX'].tolist()
-crdylst = dataframe['coordY'].tolist()
-crdzlst = dataframe['coordZ'].tolist()
-dimlst = dataframe['diameter_mm'].tolist()
-
-
-# Make a test dataset
-print('Using subset{} as test split.'.format(fold))
-teidlst = []
-for fname in os.listdir('/data/LUNA16/subset'+str(fold)+'/'):
-    if fname.endswith('.mhd'):
-        teidlst.append(fname[:-4])
-
-
-for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst, dimlst):
-    if srsid.split('-')[0] in blklst:
-        continue
-
-    # crop raw pixel as feature
-    data = np.load(os.path.join(croppath, srsid + '.npy'))
-    bgx = data.shape[2]/2-CROPSIZE/2
-    bgy = data.shape[1]/2-CROPSIZE/2
-    bgz = data.shape[0]/2-CROPSIZE/2
-    assert bgx==bgy==bgz==0
-    data = np.array(data[bgz:bgz+CROPSIZE, bgy:bgy+CROPSIZE, bgx:bgx+CROPSIZE])
-    feat = np.hstack((np.reshape(data, (-1,)) / 255, float(d)))
-    # print(feat.shape)
-    if srsid.split('-')[0] in teidlst:
-        tefnamelst.append(srsid + '.npy')
-        telabellst.append(int(label))
-        tefeatlst.append(feat)
-    else:
-        trfnamelst.append(srsid + '.npy')
-        trlabellst.append(int(label))
-        trfeatlst.append(feat)
-
-
-
-
-trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
-                   train=True, transform=transform_train, target_transform=None, download=True)
-trainloader = torch.utils.data.DataLoader(trainset, batch_size=24, shuffle=True, num_workers=8)
-
-testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, transform=transform_test,
-                  target_transform=None, download=True)
-testloader = torch.utils.data.DataLoader(testset, batch_size=24, shuffle=False, num_workers=8)
-
-
-# prepare Model
-savemodelpath = args.save_dir
-if not os.path.exists(savemodelpath):
-    os.makedirs(savemodelpath)
-
-net = DPN92_3D()
-
-if args.checkpoint:
-    # Load checkpoint.
-    logging.info('==> Resuming from {}'.format(args.checkpoint))
-    checkpoint = torch.load(os.path.join(savemodelpath, args.checkpoint))
-    net.load_state_dict(checkpoint['state_dict'])
-    m = pickle.load(open(os.path.join(savemodelpath,'gbtmodel.sav'), 'rb'))
-    best_acc = checkpoint['best_acc']
-    best_acc_gbt = checkpoint['best_acc_gbt']
-    start_epoch = checkpoint['epoch'] + 1
-else:
-    logging.info('==> Building model..')
-    m = gbt(max_depth=gbtdepth, random_state=0)
-
-
-neptime = 2
 def get_lr(epoch):
     if epoch < 150*neptime:
         lr = 0.1 #args.lr
@@ -262,18 +154,83 @@ def get_lr(epoch):
         lr = 0.001
     return lr
 
-# Define loss function (criterion) and optimizer
-criterion = nn.CrossEntropyLoss()
-optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+def get_train_test_loader(anno_csv, croppath, testfold, transform_train, transform_test):
+    trfnamelst = []
+    trlabellst = []
+    trfeatlst = []
+    tefnamelst = []
+    telabellst = []
+    tefeatlst = []
 
-if use_cuda:
-    net.cuda()
-    net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))   # use all GPU
-    criterion = criterion.cuda()
-    cudnn.benchmark = False #True
+    dataframe = pd.read_csv(anno_csv,
+                            names=['seriesuid', 'coordZ', 'coordY', 'coordX', 'diameter_mm', 'malignant'], header=0)
+    alllst = dataframe['seriesuid'].tolist()
+    labellst = dataframe['malignant'].tolist()
+    crdxlst = dataframe['coordX'].tolist()
+    crdylst = dataframe['coordY'].tolist()
+    crdzlst = dataframe['coordZ'].tolist()
+    dimlst = dataframe['diameter_mm'].tolist()
 
-# Training
-def train(epoch):
+    # Make a test dataset
+    print('Using subset{} as test split.'.format(testfold))
+    teidlst = []
+    for fname in os.listdir('/data/LUNA16/subset'+str(testfold)+'/'):
+        if fname.endswith('.mhd'):
+            teidlst.append(fname[:-4])
+
+    for srsid, label, x, y, z, d in zip(alllst, labellst, crdxlst, crdylst, crdzlst, dimlst):
+        if srsid.split('-')[0] in blklst:
+            continue
+
+        # crop raw pixel as feature
+        data = np.load(os.path.join(croppath, srsid + '.npy'))
+        bgx = data.shape[2]/2-CROPSIZE/2
+        bgy = data.shape[1]/2-CROPSIZE/2
+        bgz = data.shape[0]/2-CROPSIZE/2
+        assert bgx==bgy==bgz==0
+        data = np.array(data[bgz:bgz+CROPSIZE, bgy:bgy+CROPSIZE, bgx:bgx+CROPSIZE])
+        feat = np.hstack((np.reshape(data, (-1,)) / 255, float(d)))
+        # print(feat.shape)
+        if srsid.split('-')[0] in teidlst:
+            tefnamelst.append(srsid + '.npy')
+            telabellst.append(int(label))
+            tefeatlst.append(feat)
+        else:
+            trfnamelst.append(srsid + '.npy')
+            trlabellst.append(int(label))
+            trfeatlst.append(feat)
+
+
+    trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
+                       train=True, transform=transform_train, target_transform=None, download=True)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=24, shuffle=True, num_workers=8)
+
+    testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, transform=transform_test,
+                      target_transform=None, download=True)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=24, shuffle=False, num_workers=8)
+
+    return trainloader, testloader
+
+def get_transform(pixmean, pixstd):
+    # Data transforms
+    logging.info('==> Preparing data..')  # Random Crop, Zero out, flip, scale,
+    transform_train = transforms.Compose([
+        transforms.RandomCrop(CROPSIZE, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.RandomYFlip(),
+        transforms.RandomZFlip(),
+        transforms.ZeroOut(4),
+        transforms.ToTensor(),
+        transforms.Normalize((pixmean), (pixstd)),  # need to cal mean and std, revise norm func
+    ])
+
+    transform_test = transforms.Compose([
+        transforms.ToTensor(),
+        transforms.Normalize((pixmean), (pixstd)),
+    ])
+    return transform_train, transform_test
+
+def train(net, m, criterion, optimizer, trainloader, epoch):
     logging.info('\nEpoch: '+str(epoch))
     net.train()
     lr = get_lr(epoch)
@@ -282,17 +239,11 @@ def train(epoch):
     train_loss = 0
     correct = 0
     total = 0
-    trainfeat = np.zeros((len(trfnamelst), 2560+CROPSIZE*CROPSIZE*CROPSIZE+1))
-    trainlabel = np.zeros((len(trfnamelst),))
+    trainfeat = np.zeros((len(trainloader.dataset), 2560+CROPSIZE*CROPSIZE*CROPSIZE+1))
+    trainlabel = np.zeros((len(trainloader.dataset),))
     idx = 0
     for batch_idx, (inputs, targets, feat) in enumerate(trainloader):
         if use_cuda:
-            # print(len(inputs), len(targets), len(feat), type(inputs[0]), type(targets[0]), type(feat[0]))
-            # print(type(targets), type(inputs), len(targets))
-            # targetarr = np.zeros((len(targets),))
-            # for idx in xrange(len(targets)):
-                # targetarr[idx] = targets[idx]
-            # print((Variable(torch.from_numpy(targetarr)).data).cpu().numpy().shape)
             inputs, targets = inputs.cuda(), targets.cuda()
         optimizer.zero_grad()
         inputs, targets = Variable(inputs), Variable(targets)
@@ -323,16 +274,15 @@ def train(epoch):
     logging.info('ep '+str(epoch)+' tracc '+str(correct/float(total)*100.)+' lr '+str(lr)+' gbtacc '+str(gbttracc))
     return m
 
-#Validation
-def test(epoch, m):
+def test(net, m, criterion, testloader, epoch, args, savemodelpath):
     global best_acc
     global best_acc_gbt
     net.eval()
     test_loss = 0
     correct = 0
     total = 0
-    testfeat = np.zeros((len(tefnamelst), 2560+CROPSIZE*CROPSIZE*CROPSIZE+1))
-    testlabel = np.zeros((len(tefnamelst),))
+    testfeat = np.zeros((len(testloader.dataset), 2560+CROPSIZE*CROPSIZE*CROPSIZE+1))
+    testlabel = np.zeros((len(testloader.dataset),))
     idx = 0
     for batch_idx, (inputs, targets, feat) in enumerate(testloader):
         if use_cuda:
@@ -407,7 +357,56 @@ def test(epoch, m):
     print()
     logging.info('teacc '+str(acc)+' bestacc '+str(best_acc)+' gbtteacc '+str(gbtteacc)+' bestgbt '+str(best_acc_gbt))
 
+def main():
+    args = parse_args()
+    preprocesspath = '/data/preprocess/luna_preprocess/'
+    croppath = './crop/'
+    anno_csv = './data/annotationdetclsconvfnl_v3.csv'
+    global best_acc, best_acc_gbt, start_epoch, fold
 
-for epoch in range(start_epoch, start_epoch + 350*neptime):
-    m = train(epoch)
-    test(epoch, m)
+    if args.crop:
+        crop2(preprocesspath, croppath, anno_csv, config)
+        return
+
+    # prepare Model
+    net = DPN92_3D()
+    savemodelpath = args.save_dir
+    if not os.path.exists(savemodelpath):
+        os.makedirs(savemodelpath)
+
+    if args.checkpoint:
+        # Load checkpoint.
+        logging.info('==> Resuming from {}'.format(args.checkpoint))
+        checkpoint = torch.load(os.path.join(savemodelpath, args.checkpoint))
+        net.load_state_dict(checkpoint['state_dict'])
+        m = pickle.load(open(os.path.join(savemodelpath, 'gbtmodel.sav'), 'rb'))
+        best_acc = checkpoint['best_acc']
+        best_acc_gbt = checkpoint['best_acc_gbt']
+        start_epoch = checkpoint['epoch'] + 1
+    else:
+        logging.info('==> Building model..')
+        m = gbt(max_depth=gbtdepth, random_state=0)
+
+    # Prepare train and test data splits
+    pixmean, pixstd = get_mean_and_std(croppath, blklst)
+    transform_train, transform_test = get_transform(pixmean, pixstd)
+    trainloader, testloadter = get_train_test_loader(anno_csv, croppath, fold, transform_train, transform_test)
+
+    # Define loss function (criterion) and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+
+    if use_cuda:
+        net.cuda()
+        net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))  # use all GPU
+        criterion = criterion.cuda()
+        cudnn.benchmark = False
+
+    # Train and test(validate)
+    for epoch in range(start_epoch, start_epoch + 350*neptime):
+        m = train(net, m, criterion, optimizer, trainloader, epoch)
+        test(net, m, criterion, testloadter, epoch, args, savemodelpath)
+
+if __name__ == '__main__':
+    status = main()
+    sys.exit(status)
