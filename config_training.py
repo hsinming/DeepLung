@@ -23,7 +23,7 @@ config = {'train_data_path':['/data/LUNA16/subset0/',
           'preprocessing_backend':'python',
 
           'luna_segment':'/data/LUNA16/seg-lungs-LUNA16/',
-          'preprocess_result_path':'preprocess/',
+          'preprocess_result_path':'/data/preprocess/luna_preprocess_subset/',
           'luna_data':'/data/LUNA16/',
           'luna_label':'/data/LUNA16/CSVFILES/annotations.csv'
          } 

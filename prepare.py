@@ -578,7 +578,7 @@ def preprocess_luna():
                                        luna_segment=luna_segment, luna_data=luna_data+'subset'+str(setidx)+'/', 
                                        savepath=savepath+'subset'+str(setidx)+'/')
             N = len(filelist)
-            _=pool.map_async(partial_savenpy_luna,range(N)).get(0xffff)
+            _ = pool.map_async(partial_savenpy_luna,range(N)).get(0xffff)
         pool.close()
         pool.join()
     print('end preprocessing luna')

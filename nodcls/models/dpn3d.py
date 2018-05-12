@@ -75,7 +75,6 @@ class DPN(nn.Module):
         for i,stride in enumerate(strides):
             layers.append(Bottleneck(self.last_planes, in_planes, out_planes, dense_depth, stride, i==0))
             self.last_planes = out_planes + (i+2) * dense_depth
-            if debug: print('_make_layer', i, layers[-1].size())
         return nn.Sequential(*layers)
 
     def forward(self, x):
@@ -96,6 +95,8 @@ class DPN(nn.Module):
         if debug: print('7', out_1.size())
         out = self.linear(out_1)
         if debug: print('8', out.size())
+        out = F.softmax(out, dim=1)
+        if debug: print('out --> softmax', out.size() )
         return out, out_1
 
 
