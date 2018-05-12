@@ -96,8 +96,6 @@ class DPN(nn.Module):
         if debug: print('7', out_1.size())
         out = self.linear(out_1)
         if debug: print('8', out.size())
-        out = F.softmax(out, dim=1)
-        if debug: print('out --> softmax', out.size() )
         return out, out_1
 
 
