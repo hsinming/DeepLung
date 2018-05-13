@@ -7,9 +7,10 @@ import sys
 import argparse
 import logging
 import numpy as np
+from tqdm import tqdm
 
 import torch
-import torch.nn as nn
+import torch.nn.functional as F
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
@@ -19,7 +20,7 @@ from dataloader import lunanod
 from dataloader import CROPSIZE
 from dataloader import simpleCrop
 from models.capsnet import CapsNet3D, MarginLoss, config
-from utils import progress_bar
+from models.capsnet import ReconstructionNet3D, CapsNetWithReconstruction3D
 
 blklst = ['1.3.6.1.4.1.14519.5.2.1.6279.6001.111258527162678142285870245028',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.121993590721161347818774929286',
@@ -31,6 +32,7 @@ blklst = ['1.3.6.1.4.1.14519.5.2.1.6279.6001.111258527162678142285870245028',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.943403138251347598519939390311']
 fold = 0   # the subset for test
 neptime = 2
+batch_size = 16
 use_cuda = torch.cuda.is_available()
 best_acc = 0  # best test accuracy
 start_epoch = 0  # start from epoch 0 or last checkpoint epoch
@@ -44,6 +46,7 @@ def parse_args():
                         help='directory to save checkpoint (default: ./checkpoint-{fold}/)')
     parser.add_argument('--checkpoint', '--ckpt', default='', type=str, metavar='FILENAME',
                         help='filename of the previous checkpoint (default: none)')
+    parser.add_argument('--with_reconstruction', action='store_true', default=False)
     args = parser.parse_args()
     return args
 
@@ -100,8 +103,8 @@ def crop2(preprocesspath, croppath, anno_csv, config):
         os.makedirs(croppath)
 
     cropper = simpleCrop(config, 'test')
-
-    for idx, anno in enumerate(annoList):
+    pbar = tqdm(annoList)
+    for idx, anno in enumerate(pbar):
         fname = anno[0]
         pid = fname.split('-')[0]
         crdx = int(float(anno[1]))
@@ -114,8 +117,9 @@ def crop2(preprocesspath, croppath, anno_csv, config):
         crop_img = crop_img[0,...]
         crop_img = crop_img.astype(np.float32)
         np.save(os.path.join(croppath, fname + '.npy'), crop_img)
-        progress_bar(idx, len(annoList), 'Crop nodule: {}/{}'.format(idx, len(annoList)))
-    print('Crop done.')
+        pbar.set_description('Cropping nodules: {}/{}'.format(idx, len(annoList)))
+
+    print('\nCrop done.')
 
 def get_mean_and_std(croppath, blklst):
     # Calculate mean std
@@ -200,11 +204,11 @@ def get_train_test_loader(anno_csv, croppath, testfold, transform_train, transfo
 
     trainset = lunanod(croppath, trfnamelst, trlabellst, trfeatlst,
                        train=True, transform=transform_train, target_transform=None, download=True)
-    trainloader = torch.utils.data.DataLoader(trainset, batch_size=1, shuffle=True, num_workers=8)
+    trainloader = torch.utils.data.DataLoader(trainset, batch_size=batch_size, shuffle=True, num_workers=8)
 
     testset = lunanod(croppath, tefnamelst, telabellst, tefeatlst, train=False, transform=transform_test,
                       target_transform=None, download=True)
-    testloader = torch.utils.data.DataLoader(testset, batch_size=1, shuffle=False, num_workers=8)
+    testloader = torch.utils.data.DataLoader(testset, batch_size=batch_size, shuffle=False, num_workers=8)
 
     return trainloader, testloader
 
@@ -227,8 +231,8 @@ def get_transform(pixmean, pixstd):
     ])
     return transform_train, transform_test
 
-def train(net, criterion, optimizer, trainloader, epoch):
-    logging.info('\nEpoch: '+str(epoch))
+def train(net, criterion, optimizer, trainloader, epoch, args):
+    logging.info('\nEpoch: {}'.format(epoch))
     net.train()
     lr = get_lr(epoch)
     for param_group in optimizer.param_groups:
@@ -236,49 +240,58 @@ def train(net, criterion, optimizer, trainloader, epoch):
     train_loss = 0
     correct = 0
     total = 0
-    idx = 0
-
-    for batch_idx, (inputs, targets, _) in enumerate(trainloader):
+    pbar = tqdm(trainloader)
+    for batch_idx, (inputs, targets, _) in enumerate(pbar):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
+        inputs, targets = Variable(inputs), Variable(targets, requires_grad=False)
         optimizer.zero_grad()
-        inputs, targets = Variable(inputs), Variable(targets)
-        outputs, probs = net(inputs)
-        idx += len(targets)
-        loss = criterion(probs, targets)
+
+        if args.with_reconstruction:
+            outputs, probs = net(inputs, targets)
+            reconstruction_loss = F.mse_loss(outputs, inputs.view(-1, 32*32*32))
+            margin_loss = criterion(probs, targets)
+            loss = args.reconstruction_alpha * reconstruction_loss + margin_loss
+        else:
+            outputs, probs = net(inputs)
+            loss = criterion(probs, targets)
+
         loss.backward()
         optimizer.step()
         train_loss += loss.data[0]
         _, predicted = torch.max(probs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        progress_bar(batch_idx, len(trainloader), 'Train Loss: %.3f | Train Acc: %.3f%% (%d/%d)'
-            % (train_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        pbar.set_description('Train Loss: {:.3f}    Train Acc: {:.3f}'.format(train_loss/(batch_idx+1), 100.*correct/total))
 
-    print('ep '+str(epoch)+' tracc '+str(correct/float(total)*100.)+' lr '+str(lr))
-    logging.info('ep '+str(epoch)+' tracc '+str(correct/float(total)*100.)+' lr '+str(lr))
+    print('\nEpoch {}    Train Acc: {:.3f}    LR: {}'.format(epoch, 100.*correct/total, lr))
+    logging.info('Epoch {}    Train Acc: {:.3f}    LR: {}'.format(epoch, 100.*correct/total, lr))
 
-def test(net, criterion, testloader, epoch, args, savemodelpath):
+def test(net, criterion, testloader, epoch, savemodelpath, args):
     global best_acc
     net.eval()
     test_loss = 0
     correct = 0
     total = 0
-    idx = 0
-
-    for batch_idx, (inputs, targets, _) in enumerate(testloader):
+    pbar = tqdm(testloader)
+    for batch_idx, (inputs, targets, _) in enumerate(pbar):
         if use_cuda:
             inputs, targets = inputs.cuda(), targets.cuda()
         inputs, targets = Variable(inputs, volatile=True), Variable(targets, volatile=True)
-        outputs, probs = net(inputs)
-        idx += len(targets)
-        loss = criterion(probs, targets)
-        test_loss += loss.data[0]
+
+        if args.with_reconstruction:
+            outputs, probs = net(inputs, targets)
+            reconstruction_loss = F.mse_loss(outputs, inputs.view(-1, 32*32*32), size_average=False).data[0]
+            test_loss += criterion(probs, targets, size_average=False).data[0]
+            test_loss += args.reconstruction_alpha * reconstruction_loss
+        else:
+            outputs, probs = net(inputs)
+            test_loss += criterion(probs, targets, size_average=False).data[0]
+
         _, predicted = torch.max(probs.data, 1)
         total += targets.size(0)
         correct += predicted.eq(targets.data).cpu().sum()
-        progress_bar(batch_idx, len(testloader), 'Test Loss: %.3f | Test Acc: %.3f%% (%d/%d)'
-            % (test_loss/(batch_idx+1), 100.*correct/total, correct, total))
+        pbar.set_description('Test Loss: {:.3f}    Test Acc: {:.3f}'.format(test_loss/(batch_idx+1), 100.*correct/total))
 
     # Save checkpoint of best_acc
     acc = 100.*correct/total
@@ -310,9 +323,9 @@ def test(net, criterion, testloader, epoch, args, savemodelpath):
         torch.save(state, savemodelpath+'ckpt'+str(epoch)+'.t7')
 
     # Show and log metrics
-    print('teacc '+str(acc)+' bestacc '+str(best_acc))
+    print('\nTest Acc: {}    Best Acc: {}'.format(acc, best_acc))
     print()
-    logging.info('teacc '+str(acc)+' bestacc '+str(best_acc))
+    logging.info('Test Acc: {}    Best Acc: {}'.format(acc, best_acc))
 
 def main():
     args = parse_args()
@@ -325,11 +338,17 @@ def main():
         crop2(preprocesspath, croppath, anno_csv, config)
         return
 
-    # prepare Model
-    net = CapsNet3D(routing_iterations=3, n_classes=2)
     savemodelpath = args.save_dir
     if not os.path.exists(savemodelpath):
         os.makedirs(savemodelpath)
+
+    # prepare Model
+    net = CapsNet3D(routing_iterations=3, n_classes=2)
+
+    if args.with_reconstruction:
+        reconstruction_model = ReconstructionNet3D(n_dim=16, n_classes=2)
+        setattr(args, 'reconstruction_alpha', 0.0005)
+        net = CapsNetWithReconstruction3D(net, reconstruction_model)
 
     if args.checkpoint:
         # Load checkpoint.
@@ -353,14 +372,14 @@ def main():
     if use_cuda:
         net.cuda()
         #net = torch.nn.DataParallel(net, device_ids=range(torch.cuda.device_count()))  # use all GPU
-        net = torch.nn.DataParallel(net, device_ids=[0])  # use all GPU
+        net = torch.nn.DataParallel(net, device_ids=[0,1,2,3])  # use all GPU
         criterion = criterion.cuda()
         cudnn.benchmark = False
 
     # Train and test(validate)
     for epoch in range(start_epoch, start_epoch + 350*neptime):
-        train(net, criterion, optimizer, trainloader, epoch)
-        test(net, criterion, testloadter, epoch, args, savemodelpath)
+        train(net, criterion, optimizer, trainloader, epoch, args)
+        test(net, criterion, testloadter, epoch, savemodelpath, args)
 
 if __name__ == '__main__':
     status = main()
