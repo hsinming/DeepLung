@@ -1,5 +1,8 @@
 #!/usr/bin/python2
 #coding=utf-8
+"""
+Copied from https://github.com/adambielski/CapsNet-pytorch/blob/master/net.py
+"""
 from __future__ import print_function
 
 import torch
