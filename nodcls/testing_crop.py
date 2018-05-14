@@ -5,6 +5,7 @@ from glob import glob
 import numpy as np
 from matplotlib import pyplot as plt
 import matplotlib.gridspec as gridspec
+from tqdm import tqdm
 
 
 
@@ -16,11 +17,13 @@ save_crop_root = './crop_pic/'
 if not os.path.exists(save_crop_root):
     os.makedirs(save_crop_root)
 
-for idx, fn in enumerate(cropfnlist):
+pbar = tqdm(cropfnlist)
+
+for fn in pbar:
     crop_img = np.load(fn)
     crop_size = crop_img.shape[0]
     nodule_id = os.path.basename(fn).split('.npy')[0]
-    print('crop shape: ', crop_img.shape)
+    pbar.set_description('crop shape: {}'.format(crop_img.shape))
 
     plt.close('all')
     fig = plt.figure(figsize=(6, 6), dpi=96)
