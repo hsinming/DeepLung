@@ -2,16 +2,21 @@
 #coding=utf-8
 """
 Copied from https://github.com/adambielski/CapsNet-pytorch/blob/master/net.py
+Copied from https://github.com/cedrickchee/capsule-net-pytorch
 """
 from __future__ import print_function
 
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import math
-
+import torch.optim as optim
+from torchvision import datasets, transforms
 from torch.optim import lr_scheduler
 from torch.autograd import Variable
+
+import math
+import argparse
+
 
 config = {}
 config['crop_size'] = [32, 32, 32]
@@ -23,12 +28,61 @@ config['augtype'] = {'flip':True,'swap':False,'rotate':False,'scale':False}
 config['filling_value'] = 160
 
 
-def squash(x):
-    # x: (N, output_cap*H*W, output_dim)
-    lengths2 = x.pow(2).sum(dim=2)
-    lengths = lengths2.sqrt()
-    x = x * (lengths2 / (1 + lengths2) / lengths).view(x.size(0), x.size(1), 1)
-    return x
+def squash(sj, dim=2):
+    # sj: (N, #output_cap*H*W, output_dim)
+    sj_mag_sq = torch.sum(sj**2, dim, keepdim=True)
+    sj_mag = torch.sqrt(sj_mag_sq)
+    vj = (sj_mag_sq / (1 + sj_mag_sq))* (sj / sj_mag + 1e-9)
+    return vj
+
+
+class ConvLayer(nn.Module):
+    """
+    Conventional Conv2d layer
+    Author: Cedric Chee
+    """
+
+    def __init__(self, in_channel, out_channel, kernel_size):
+        super(ConvLayer, self).__init__()
+
+        self.conv0 = nn.Conv2d(in_channels=in_channel,
+                               out_channels=out_channel,
+                               kernel_size=kernel_size,
+                               stride=1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        """Forward pass"""
+        # x shape: [128, 1, 28, 28]
+        # out_conv0 shape: [128, 256, 20, 20]
+        out_conv0 = self.conv0(x)
+        # out_relu shape: [128, 256, 20, 20]
+        out_relu = self.relu(out_conv0)
+        return out_relu
+
+
+class ConvLayer3D(nn.Module):
+    """
+    Conventional Conv3d layer
+    """
+
+    def __init__(self, in_channel, out_channel, kernel_size):
+        super(ConvLayer3D, self).__init__()
+
+        self.conv0 = nn.Conv3d(in_channels=in_channel,
+                               out_channels=out_channel,
+                               kernel_size=kernel_size,
+                               stride=1)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        """Forward pass"""
+        # x shape: [128, 1, 28, 28, 28]
+        # out_conv0 shape: [128, 256, 20, 20, 20]
+        out_conv0 = self.conv0(x)
+        # out_relu shape: [128, 256, 20, 20, 20]
+        out_relu = self.relu(out_conv0)
+        return out_relu
 
 
 class AgreementRouting(nn.Module):
@@ -138,19 +192,42 @@ class CapsNet(nn.Module):
         return x, probs
 
 
+class CapsNetDeep(nn.Module):
+    def __init__(self, routing_iterations, n_classes=10):
+        super(CapsNetDeep, self).__init__()   # input (N,1,28,28)
+        self.conv1 = nn.Conv2d(1, 256, kernel_size=9, stride=1)  # output = (N,1,20,20)
+        self.cap0 = PrimaryCapsLayer(256, 32, 8, kernel_size=9, stride=2)  # outputs 32*6*6 capsules
+        self.num_cap0 = 32 * 6 * 6
+        routing_module0 = AgreementRouting(self.num_cap0, 4, routing_iterations)
+        self.num_cap1 = 4
+        self.cap1 = CapsLayer(self.num_cap0, 8, self.num_cap1, 12, routing_module0)
+        routing_module1 = AgreementRouting(self.num_cap1, n_classes, routing_iterations)
+        self.cap2 = CapsLayer(self.num_cap1, 12, n_classes, 16, routing_module1)
+
+
+    def forward(self, input):
+        x = self.conv1(input)
+        x = F.relu(x)
+        x = self.cap0(x)
+        x = self.cap1(x)
+        x = self.cap2(x)
+        probs = x.pow(2).sum(dim=2).sqrt()
+        return x, probs
+
+
 class CapsNet3D(nn.Module):
     def __init__(self, routing_iterations, n_classes=10):
-        super(CapsNet3D, self).__init__()
-        self.conv1 = nn.Conv3d(1, 256, kernel_size=5, stride=1, padding=2)
-        self.primaryCaps = PrimaryCapsLayer3D(256, 32, 8, kernel_size=5, stride=2, padding=2)  # outputs 16*16*16
-        self.num_primaryCaps = 32 * 16 * 16 * 16   # (#output_caps * D * H * W)
+        super(CapsNet3D, self).__init__()   # input (N, 1, 32, 32, 32)
+        self.conv1 = ConvLayer3D(1, 256, kernel_size=9)   # (N, 256, 28, 28, 28)
+        self.primaryCaps = PrimaryCapsLayer3D(256, 32, 8, kernel_size=9, stride=2, padding=0)  # output (13,13,13)
+        self.num_primaryCaps = 32 * 6 * 6 * 6   # (#output_caps * D * H * W)
         routing_module = AgreementRouting(self.num_primaryCaps, n_classes, routing_iterations)
         self.digitCaps = CapsLayer(self.num_primaryCaps, 8, n_classes, 16, routing_module)
 
     def forward(self, input):
         x = self.conv1(input)
         x = F.relu(x)
-        x = self.primaryCaps(x)   #(N, #output_caps*D*H*W, #dim)
+        x = self.primaryCaps(x)   # output (N, #output_caps*D*H*W, #output_dim)
         x = self.digitCaps(x)
         probs = x.pow(2).sum(dim=2).sqrt()
         return x, probs
@@ -245,12 +322,6 @@ class MarginLoss(nn.Module):
 
 
 if __name__ == '__main__':
-
-    import argparse
-    import torch.optim as optim
-    from torchvision import datasets, transforms
-    from torch.autograd import Variable
-
     # Training settings
     parser = argparse.ArgumentParser(description='CapsNet with MNIST')
     parser.add_argument('--batch-size', type=int, default=128, metavar='N',

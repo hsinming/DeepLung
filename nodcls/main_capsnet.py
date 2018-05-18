@@ -14,6 +14,7 @@ import torch.nn.functional as F
 import torch.optim as optim
 import torch.backends.cudnn as cudnn
 from torch.autograd import Variable
+from torch.optim import lr_scheduler
 
 import transforms as transforms
 from dataloader import lunanod
@@ -30,7 +31,7 @@ blklst = ['1.3.6.1.4.1.14519.5.2.1.6279.6001.111258527162678142285870245028',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.295420274214095686326263147663',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.776800177074349870648765614630',
           '1.3.6.1.4.1.14519.5.2.1.6279.6001.943403138251347598519939390311']
-fold = 0   # the subset for test
+fold = 1   # the subset for test
 neptime = 2
 batch_size = 16
 use_cuda = torch.cuda.is_available()
@@ -237,6 +238,8 @@ def train(net, criterion, optimizer, trainloader, epoch, args):
     lr = get_lr(epoch)
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
+    #lr = optimizer.param_groups[0]['lr']
+
     train_loss = 0
     correct = 0
     total = 0
@@ -282,11 +285,11 @@ def test(net, criterion, testloader, epoch, savemodelpath, args):
         if args.with_reconstruction:
             outputs, probs = net(inputs, targets)
             reconstruction_loss = F.mse_loss(outputs, inputs.view(-1, 32*32*32), size_average=False).data[0]
-            test_loss += criterion(probs, targets, size_average=False).data[0]
+            test_loss += criterion(probs, targets, size_average=True).data[0]
             test_loss += args.reconstruction_alpha * reconstruction_loss
         else:
             outputs, probs = net(inputs)
-            test_loss += criterion(probs, targets, size_average=False).data[0]
+            test_loss += criterion(probs, targets, size_average=True).data[0]
 
         _, predicted = torch.max(probs.data, 1)
         total += targets.size(0)
@@ -303,7 +306,6 @@ def test(net, criterion, testloader, epoch, savemodelpath, args):
                  'save_dir': savemodelpath,
                  'state_dict': state_dict,
                  'args': args,
-                 'lr': get_lr(epoch),
                  'best_acc': best_acc}
         torch.save(state, os.path.join(savemodelpath, 'ckpt.t7'))
         best_acc = acc
@@ -316,16 +318,16 @@ def test(net, criterion, testloader, epoch, savemodelpath, args):
              'save_dir': savemodelpath,
              'state_dict': state_dict,
              'args': args,
-             'lr': get_lr(epoch),
              'best_acc': best_acc}
     if epoch % 50 == 0:
         logging.info('Saving..')
         torch.save(state, savemodelpath+'ckpt'+str(epoch)+'.t7')
 
     # Show and log metrics
-    print('\nTest Acc: {}    Best Acc: {}'.format(acc, best_acc))
+    print('\nTest Acc: {:.3f}    Best Acc: {:.3f}'.format(acc, best_acc))
     print()
-    logging.info('Test Acc: {}    Best Acc: {}'.format(acc, best_acc))
+    logging.info('Test Acc: {:.3f}    Best Acc: {:.3f}'.format(acc, best_acc))
+    return test_loss
 
 def main():
     args = parse_args()
@@ -341,6 +343,11 @@ def main():
     savemodelpath = args.save_dir
     if not os.path.exists(savemodelpath):
         os.makedirs(savemodelpath)
+
+    # Prepare train and test data splits
+    pixmean, pixstd = get_mean_and_std(croppath, blklst)
+    transform_train, transform_test = get_transform(pixmean, pixstd)
+    trainloader, testloadter = get_train_test_loader(anno_csv, croppath, fold, transform_train, transform_test)
 
     # prepare Model
     net = CapsNet3D(routing_iterations=3, n_classes=2)
@@ -360,14 +367,11 @@ def main():
     else:
         logging.info('==> Building model..')
 
-    # Prepare train and test data splits
-    pixmean, pixstd = get_mean_and_std(croppath, blklst)
-    transform_train, transform_test = get_transform(pixmean, pixstd)
-    trainloader, testloadter = get_train_test_loader(anno_csv, croppath, fold, transform_train, transform_test)
-
     # Define loss function (criterion) and optimizer
     criterion = MarginLoss(0.9, 0.1, 0.5)
     optimizer = optim.SGD(net.parameters(), lr=args.lr, momentum=0.9, weight_decay=5e-4)
+    #optimizer = optim.Adam(net.parameters(), lr=args.lr)
+    #scheduler = lr_scheduler.ReduceLROnPlateau(optimizer, verbose=True, patience=10, min_lr=1e-6)
 
     if use_cuda:
         net.cuda()
@@ -379,7 +383,8 @@ def main():
     # Train and test(validate)
     for epoch in range(start_epoch, start_epoch + 350*neptime):
         train(net, criterion, optimizer, trainloader, epoch, args)
-        test(net, criterion, testloadter, epoch, savemodelpath, args)
+        test_loss = test(net, criterion, testloadter, epoch, savemodelpath, args)
+        #scheduler.step(test_loss)
 
 if __name__ == '__main__':
     status = main()
